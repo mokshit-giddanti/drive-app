@@ -7,6 +7,7 @@ const connectDB = require("./config/db");
 const oauth2Client = require("./config/google");
 const User = require("./models/user.model");
 const { ensureAppFolders } = require("./services/driveBootstrap.service");
+const { writeDailyLog } = require("./services/log.service");
 
 const { google } = require("googleapis");
 
@@ -96,6 +97,18 @@ app.get("/api/auth/google/callback", async (req, res) => {
         runValidators: true,
       }
     );
+    try {
+  await writeDailyLog(oauth2Client, dbUser.driveFolders.logs, {
+    action: "LOGIN_SUCCESS",
+    status: "SUCCESS",
+    userId: String(dbUser._id),
+    googleId: dbUser.googleId,
+    email: dbUser.email,
+    name: dbUser.name,
+  });
+} catch (logError) {
+  console.error("Login log write failed:", logError.message);
+}
 
     const appToken = jwt.sign(
       {
