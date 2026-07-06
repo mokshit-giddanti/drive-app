@@ -6,6 +6,7 @@ require("dotenv").config();
 const connectDB = require("./config/db");
 const oauth2Client = require("./config/google");
 const User = require("./models/user.model");
+const { ensureAppFolders } = require("./services/driveBootstrap.service");
 
 const { google } = require("googleapis");
 
@@ -67,18 +68,31 @@ app.get("/api/auth/google/callback", async (req, res) => {
       lastLoginAt: new Date(),
     };
 
-    // Only update refresh token if Google sends a new one.
-    // This prevents overwriting the old valid refresh token with undefined.
     if (tokens.refresh_token) {
       updateData.googleRefreshToken = tokens.refresh_token;
     }
 
-    const dbUser = await User.findOneAndUpdate(
+    let dbUser = await User.findOneAndUpdate(
       { googleId: googleUser.id },
       { $set: updateData },
       {
         new: true,
         upsert: true,
+        runValidators: true,
+      }
+    );
+
+    const driveFolders = await ensureAppFolders(oauth2Client);
+
+    dbUser = await User.findByIdAndUpdate(
+      dbUser._id,
+      {
+        $set: {
+          driveFolders,
+        },
+      },
+      {
+        new: true,
         runValidators: true,
       }
     );
@@ -103,6 +117,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
         name: dbUser.name,
         picture: dbUser.picture,
       },
+      driveFolders: dbUser.driveFolders,
       token: appToken,
       hasGoogleRefreshToken: Boolean(dbUser.googleRefreshToken),
       receivedNewRefreshToken: Boolean(tokens.refresh_token),

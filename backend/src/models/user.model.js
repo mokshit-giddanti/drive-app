@@ -31,6 +31,25 @@ const userSchema = new mongoose.Schema(
       default: "",
     },
 
+    driveFolders: {
+      root: {
+        type: String,
+        default: "",
+      },
+      uploads: {
+        type: String,
+        default: "",
+      },
+      logs: {
+        type: String,
+        default: "",
+      },
+      system: {
+        type: String,
+        default: "",
+      },
+    },
+
     lastLoginAt: {
       type: Date,
       default: Date.now,
