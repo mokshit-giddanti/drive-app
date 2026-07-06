@@ -3,7 +3,11 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
+const connectDB = require("./config/db");
 const oauth2Client = require("./config/google");
+const User = require("./models/user.model");
+
+const { google } = require("googleapis");
 
 const app = express();
 
@@ -46,22 +50,44 @@ app.get("/api/auth/google/callback", async (req, res) => {
     }
 
     const { tokens } = await oauth2Client.getToken(code);
-
     oauth2Client.setCredentials(tokens);
 
-    const oauth2 = require("googleapis").google.oauth2({
+    const oauth2 = google.oauth2({
       auth: oauth2Client,
       version: "v2",
     });
 
-    const { data: user } = await oauth2.userinfo.get();
+    const { data: googleUser } = await oauth2.userinfo.get();
+
+    const updateData = {
+      googleId: googleUser.id,
+      email: googleUser.email,
+      name: googleUser.name,
+      picture: googleUser.picture,
+      lastLoginAt: new Date(),
+    };
+
+    // Only update refresh token if Google sends a new one.
+    // This prevents overwriting the old valid refresh token with undefined.
+    if (tokens.refresh_token) {
+      updateData.googleRefreshToken = tokens.refresh_token;
+    }
+
+    const dbUser = await User.findOneAndUpdate(
+      { googleId: googleUser.id },
+      { $set: updateData },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true,
+      }
+    );
 
     const appToken = jwt.sign(
       {
-        googleId: user.id,
-        email: user.email,
-        name: user.name,
-        picture: user.picture,
+        userId: dbUser._id,
+        googleId: dbUser.googleId,
+        email: dbUser.email,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
@@ -71,13 +97,15 @@ app.get("/api/auth/google/callback", async (req, res) => {
       success: true,
       message: "Google login successful",
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        picture: user.picture,
+        id: dbUser._id,
+        googleId: dbUser.googleId,
+        email: dbUser.email,
+        name: dbUser.name,
+        picture: dbUser.picture,
       },
       token: appToken,
-      hasGoogleRefreshToken: Boolean(tokens.refresh_token),
+      hasGoogleRefreshToken: Boolean(dbUser.googleRefreshToken),
+      receivedNewRefreshToken: Boolean(tokens.refresh_token),
     });
   } catch (error) {
     console.error("Google OAuth Error:", error);
@@ -92,6 +120,8 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+connectDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 });
