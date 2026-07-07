@@ -4,7 +4,7 @@ const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
-const oauth2Client = require("./config/google");
+const { oauth2Client } = require("./config/google");
 const User = require("./models/user.model");
 const { ensureAppFolders } = require("./services/driveBootstrap.service");
 const { writeDailyLog } = require("./services/log.service");
