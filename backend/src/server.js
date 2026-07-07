@@ -10,11 +10,13 @@ const { ensureAppFolders } = require("./services/driveBootstrap.service");
 const { writeDailyLog } = require("./services/log.service");
 
 const { google } = require("googleapis");
+const folderRoutes = require("./routes/folder.routes");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use("/api/folders", folderRoutes);
 
 app.get("/", (req, res) => {
   res.json({
