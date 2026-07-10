@@ -33,6 +33,12 @@ const authMiddleware = async (req, res, next) => {
     }
 
     req.user = user;
+    req.auth = {
+      authProvider: decoded.authProvider || "unknown",
+      userId: decoded.userId,
+      googleId: decoded.googleId,
+      email: decoded.email,
+    };
 
     next();
   } catch (error) {

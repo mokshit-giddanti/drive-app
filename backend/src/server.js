@@ -25,12 +25,13 @@ app.use(express.json());
 
 app.use("/api/folders", folderRoutes);
 
-const createAppToken = (user) => {
+const createAppToken = (user, authProvider) => {
   return jwt.sign(
     {
       userId: user._id,
       googleId: user.googleId,
       email: user.email,
+      authProvider,
     },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
