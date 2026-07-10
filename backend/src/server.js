@@ -15,7 +15,7 @@ const { ensureAppFolders } = require("./services/driveBootstrap.service");
 const { writeDailyLog } = require("./services/log.service");
 
 const folderRoutes = require("./routes/folder.routes");
-
+const fileRoutes = require("./routes/file.routes");
 const { google } = require("googleapis");
 
 const app = express();
@@ -26,7 +26,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api/folders", folderRoutes);
-
+app.use("/api/files", fileRoutes);
 const getBackendUrl = (req) => {
   return process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
 };
