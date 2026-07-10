@@ -31,6 +31,11 @@ const userSchema = new mongoose.Schema(
       default: "",
     },
 
+    passwordHash: {
+      type: String,
+      default: "",
+    },
+
     driveFolders: {
       root: {
         type: String,

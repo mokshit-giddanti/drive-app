@@ -28,7 +28,7 @@ const authMiddleware = async (req, res, next) => {
     if (!user.googleRefreshToken) {
       return res.status(401).json({
         success: false,
-        message: "Google refresh token missing. Please login again.",
+        message: "Google refresh token missing. Please login with Google again.",
       });
     }
 
