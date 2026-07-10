@@ -62,7 +62,7 @@ const getStorageStatus = async (authClient) => {
   const usageInDrive = Number(quota.usageInDrive || 0);
   const usageInDriveTrash = Number(quota.usageInDriveTrash || 0);
 
-  const usedPercent = limit ? Number(((usage / limit) * 100).toFixed(2)) : null;
+  const usedPercent = limit ? Number(((usage / limit) * 100).toFixed(4)) : null;
 
   return {
     usage,
