@@ -20,10 +20,16 @@ const { google } = require("googleapis");
 
 const app = express();
 
+app.set("trust proxy", 1);
+
 app.use(cors());
 app.use(express.json());
 
 app.use("/api/folders", folderRoutes);
+
+const getBackendUrl = (req) => {
+  return process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
+};
 
 const createAppToken = (user, authProvider) => {
   return jwt.sign(
@@ -84,6 +90,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
     }
 
     const { tokens } = await oauth2Client.getToken(code);
+
     oauth2Client.setCredentials(tokens);
 
     const oauth2 = google.oauth2({
@@ -134,7 +141,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
     try {
       await writeDailyLog(authClient, dbUser.driveFolders.logs, {
-        action: "LOGIN_SUCCESS",
+        action: "GOOGLE_LOGIN_SUCCESS",
         status: "SUCCESS",
         userId: String(dbUser._id),
         googleId: dbUser.googleId,
@@ -142,10 +149,12 @@ app.get("/api/auth/google/callback", async (req, res) => {
         name: dbUser.name,
       });
     } catch (logError) {
-      console.error("Login log write failed:", logError.message);
+      console.error("Google login log write failed:", logError.message);
     }
 
-    const appToken = createAppToken(dbUser);
+    const appToken = createAppToken(dbUser, "google");
+
+    const hasPassword = Boolean(dbUser.passwordHash);
 
     res.json({
       success: true,
@@ -161,7 +170,9 @@ app.get("/api/auth/google/callback", async (req, res) => {
       token: appToken,
       hasGoogleRefreshToken: Boolean(dbUser.googleRefreshToken),
       receivedNewRefreshToken: Boolean(tokens.refresh_token),
-      hasPassword: Boolean(dbUser.passwordHash),
+      hasPassword,
+      requiresPasswordSetup: !hasPassword,
+      nextAction: hasPassword ? "GO_TO_DASHBOARD" : "SET_PASSWORD",
     });
   } catch (error) {
     console.error("Google OAuth Error:", error);
@@ -177,6 +188,16 @@ app.get("/api/auth/google/callback", async (req, res) => {
 app.post("/api/auth/set-password", authMiddleware, async (req, res) => {
   try {
     const { password } = req.body;
+
+    if (req.auth.authProvider !== "google") {
+      return res.status(403).json({
+        success: false,
+        code: "GOOGLE_LOGIN_REQUIRED",
+        message:
+          "Password setup/reset requires Google login. Please login with Google again.",
+        googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
+      });
+    }
 
     if (!password || password.length < 8) {
       return res.status(400).json({
@@ -204,25 +225,27 @@ app.post("/api/auth/set-password", authMiddleware, async (req, res) => {
 
     try {
       await writeDailyLog(authClient, dbUser.driveFolders.logs, {
-        action: "PASSWORD_SET",
+        action: "PASSWORD_SET_OR_RESET",
         status: "SUCCESS",
         userId: String(dbUser._id),
         email: dbUser.email,
       });
     } catch (logError) {
-      console.error("Password set log failed:", logError.message);
+      console.error("Password set/reset log failed:", logError.message);
     }
 
     res.json({
       success: true,
-      message: "Password set successfully",
+      message: "Password set/reset successfully",
+      hasPassword: true,
+      nextAction: "LOGIN_WITH_EMAIL_PASSWORD",
     });
   } catch (error) {
-    console.error("Set password error:", error);
+    console.error("Set/reset password error:", error);
 
     res.status(500).json({
       success: false,
-      message: "Failed to set password",
+      message: "Failed to set/reset password",
       error: error.message,
     });
   }
@@ -248,7 +271,7 @@ app.post("/api/auth/login", async (req, res) => {
         success: false,
         code: "GOOGLE_LOGIN_REQUIRED",
         message: "User not found. Please login with Google first.",
-        googleLoginUrl: `${req.protocol}://${req.get("host")}/api/auth/google`,
+        googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
       });
     }
 
@@ -258,7 +281,7 @@ app.post("/api/auth/login", async (req, res) => {
         code: "GOOGLE_LOGIN_REQUIRED",
         message:
           "Google Drive permission missing. Please login with Google again.",
-        googleLoginUrl: `${req.protocol}://${req.get("host")}/api/auth/google`,
+        googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
       });
     }
 
@@ -267,6 +290,7 @@ app.post("/api/auth/login", async (req, res) => {
         success: false,
         code: "PASSWORD_SETUP_REQUIRED",
         message: "Password not set. Login with Google once and set password.",
+        googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
       });
     }
 
@@ -275,11 +299,15 @@ app.post("/api/auth/login", async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
+        code: "INVALID_PASSWORD",
+        message:
+          "Invalid email or password. If you forgot your password, login with Google to reset it.",
+        googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
       });
     }
 
     dbUser.lastLoginAt = new Date();
+
     await dbUser.save();
 
     const authClient = getUserAuthClient(dbUser);
@@ -295,7 +323,7 @@ app.post("/api/auth/login", async (req, res) => {
       console.error("Password login log failed:", logError.message);
     }
 
-    const appToken = createAppToken(dbUser);
+    const appToken = createAppToken(dbUser, "password");
 
     res.json({
       success: true,
@@ -309,9 +337,10 @@ app.post("/api/auth/login", async (req, res) => {
       },
       driveFolders: dbUser.driveFolders,
       token: appToken,
+      nextAction: "GO_TO_DASHBOARD",
     });
   } catch (error) {
-    console.error("Email login error:", error);
+    console.error("Email/password login error:", error);
 
     res.status(500).json({
       success: false,
