@@ -5,6 +5,7 @@ const upload = require("../middleware/upload.middleware");
 
 const { createOAuth2Client } = require("../config/google");
 const { writeDailyLog } = require("../services/log.service");
+const { checkStorageAlerts } = require("../services/storage.service");
 
 const {
   uploadFile,
@@ -25,6 +26,34 @@ const getUserAuthClient = (user) => {
   });
 
   return authClient;
+};
+
+const runStorageAlertCheck = async (authClient, user) => {
+  try {
+    const result = await checkStorageAlerts(
+      authClient,
+      user.driveFolders.system,
+      {
+        alertEmail: user.email,
+      }
+    );
+
+    if (result.alertsTriggered.length > 0) {
+      await writeDailyLog(authClient, user.driveFolders.logs, {
+        action: "STORAGE_ALERT_TRIGGERED",
+        status: "SUCCESS",
+        userId: String(user._id),
+        email: user.email,
+        alertsTriggered: result.alertsTriggered,
+        emailResults: result.emailResults,
+      });
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Storage alert auto-check failed:", error.message);
+    return null;
+  }
 };
 
 router.post(
@@ -73,10 +102,17 @@ router.post(
         parentFolderId: finalParentFolderId,
       });
 
+      const storageAlertResult = await runStorageAlertCheck(
+        authClient,
+        req.user
+      );
+
       res.status(201).json({
         success: true,
         message: "File uploaded successfully",
         file: uploadedFile,
+        storageStatus: storageAlertResult?.status || null,
+        alertsTriggered: storageAlertResult?.alertsTriggered || [],
       });
     } catch (error) {
       console.error("Upload file error:", error);
@@ -258,10 +294,14 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
       fileId,
     });
 
+    const storageAlertResult = await runStorageAlertCheck(authClient, req.user);
+
     res.json({
       success: true,
       message: "File moved to trash successfully",
       file,
+      storageStatus: storageAlertResult?.status || null,
+      alertsTriggered: storageAlertResult?.alertsTriggered || [],
     });
   } catch (error) {
     console.error("Delete file error:", error);

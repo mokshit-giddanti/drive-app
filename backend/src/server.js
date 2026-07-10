@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 require("dotenv").config();
 
+const { google } = require("googleapis");
+
 const connectDB = require("./config/db");
 const { oauth2Client, createOAuth2Client } = require("./config/google");
 
@@ -16,7 +18,7 @@ const { writeDailyLog } = require("./services/log.service");
 
 const folderRoutes = require("./routes/folder.routes");
 const fileRoutes = require("./routes/file.routes");
-const { google } = require("googleapis");
+const storageRoutes = require("./routes/storage.routes");
 
 const app = express();
 
@@ -27,6 +29,16 @@ app.use(express.json());
 
 app.use("/api/folders", folderRoutes);
 app.use("/api/files", fileRoutes);
+app.use("/api/storage", storageRoutes);
+
+const googleScopes = [
+  "openid",
+  "email",
+  "profile",
+  "https://www.googleapis.com/auth/drive.file",
+  "https://www.googleapis.com/auth/drive.metadata.readonly",
+];
+
 const getBackendUrl = (req) => {
   return process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
 };
@@ -62,17 +74,10 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/auth/google", (req, res) => {
-  const scopes = [
-    "openid",
-    "email",
-    "profile",
-    "https://www.googleapis.com/auth/drive.file",
-  ];
-
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: scopes,
+    scope: googleScopes,
   });
 
   res.redirect(authUrl);
@@ -307,7 +312,6 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     dbUser.lastLoginAt = new Date();
-
     await dbUser.save();
 
     const authClient = getUserAuthClient(dbUser);
