@@ -19,6 +19,7 @@ const { writeDailyLog } = require("./services/log.service");
 const folderRoutes = require("./routes/folder.routes");
 const fileRoutes = require("./routes/file.routes");
 const storageRoutes = require("./routes/storage.routes");
+const { startSelfPing } = require("./services/selfPing.service");
 
 const app = express();
 
@@ -359,5 +360,7 @@ const PORT = process.env.PORT || 5000;
 connectDB().then(() => {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+
+    startSelfPing();
   });
 });
