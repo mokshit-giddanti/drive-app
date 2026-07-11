@@ -20,6 +20,7 @@ const folderRoutes = require("./routes/folder.routes");
 const fileRoutes = require("./routes/file.routes");
 const storageRoutes = require("./routes/storage.routes");
 const { startSelfPing } = require("./services/selfPing.service");
+const logRoutes = require("./routes/log.routes");
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use(express.json());
 app.use("/api/folders", folderRoutes);
 app.use("/api/files", fileRoutes);
 app.use("/api/storage", storageRoutes);
+app.use("/api/logs", logRoutes);
 
 const googleScopes = [
   "openid",

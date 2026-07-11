@@ -6,6 +6,7 @@ const upload = require("../middleware/upload.middleware");
 const { createOAuth2Client } = require("../config/google");
 const { writeDailyLog } = require("../services/log.service");
 const { checkStorageAlerts } = require("../services/storage.service");
+const { assertUserContentAccess } = require("../services/driveGuard.service");
 
 const {
   uploadFile,
@@ -83,6 +84,9 @@ router.post(
         });
       }
 
+      // ownership/access check before uploading into any folder
+      await assertUserContentAccess(authClient, req.user, finalParentFolderId);
+
       const uploadedFile = await uploadFile(authClient, {
         fileBuffer: req.file.buffer,
         originalName: req.file.originalname,
@@ -117,10 +121,9 @@ router.post(
     } catch (error) {
       console.error("Upload file error:", error);
 
-      res.status(500).json({
+      res.status(error.statusCode || 500).json({
         success: false,
-        message: "Failed to upload file",
-        error: error.message,
+        message: error.message || "Failed to upload file",
       });
     }
   }
@@ -142,6 +145,9 @@ router.get("/", authMiddleware, async (req, res) => {
       });
     }
 
+    // ownership/access check before listing folder contents
+    await assertUserContentAccess(authClient, req.user, finalParentFolderId);
+
     const files = await listFiles(authClient, {
       parentFolderId: finalParentFolderId,
     });
@@ -154,10 +160,9 @@ router.get("/", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("List files error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to list files",
-      error: error.message,
+      message: error.message || "Failed to list files",
     });
   }
 });
@@ -167,6 +172,9 @@ router.get("/:fileId/download", authMiddleware, async (req, res) => {
     const { fileId } = req.params;
 
     const authClient = getUserAuthClient(req.user);
+
+    // ownership/access check before download
+    await assertUserContentAccess(authClient, req.user, fileId);
 
     const { metadata, stream } = await downloadFile(authClient, {
       fileId,
@@ -197,10 +205,9 @@ router.get("/:fileId/download", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Download file error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to download file",
-      error: error.message,
+      message: error.message || "Failed to download file",
     });
   }
 });
@@ -210,6 +217,9 @@ router.get("/:fileId", authMiddleware, async (req, res) => {
     const { fileId } = req.params;
 
     const authClient = getUserAuthClient(req.user);
+
+    // ownership/access check before file details
+    await assertUserContentAccess(authClient, req.user, fileId);
 
     const file = await getFileDetails(authClient, {
       fileId,
@@ -222,10 +232,9 @@ router.get("/:fileId", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Get file details error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to get file details",
-      error: error.message,
+      message: error.message || "Failed to get file details",
     });
   }
 });
@@ -243,6 +252,9 @@ router.patch("/:fileId", authMiddleware, async (req, res) => {
     }
 
     const authClient = getUserAuthClient(req.user);
+
+    // ownership/access check before rename
+    await assertUserContentAccess(authClient, req.user, fileId);
 
     const file = await renameFile(authClient, {
       fileId,
@@ -268,10 +280,9 @@ router.patch("/:fileId", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Rename file error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to rename file",
-      error: error.message,
+      message: error.message || "Failed to rename file",
     });
   }
 });
@@ -282,23 +293,35 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
 
     const authClient = getUserAuthClient(req.user);
 
+    // allowTrashed true because duplicate delete should return alreadyTrashed
+    await assertUserContentAccess(authClient, req.user, fileId, {
+      allowTrashed: true,
+    });
+
     const file = await deleteFile(authClient, {
       fileId,
     });
 
-    await writeDailyLog(authClient, req.user.driveFolders.logs, {
-      action: "FILE_DELETE",
-      status: "SUCCESS",
-      userId: String(req.user._id),
-      email: req.user.email,
-      fileId,
-    });
+    // avoid duplicate delete log
+    if (!file.alreadyTrashed) {
+      await writeDailyLog(authClient, req.user.driveFolders.logs, {
+        action: "FILE_DELETE",
+        status: "SUCCESS",
+        userId: String(req.user._id),
+        email: req.user.email,
+        fileId,
+        fileName: file.name,
+      });
+    }
 
     const storageAlertResult = await runStorageAlertCheck(authClient, req.user);
 
     res.json({
       success: true,
-      message: "File moved to trash successfully",
+      message: file.alreadyTrashed
+        ? "File was already in trash"
+        : "File moved to trash successfully",
+      alreadyTrashed: file.alreadyTrashed,
       file,
       storageStatus: storageAlertResult?.status || null,
       alertsTriggered: storageAlertResult?.alertsTriggered || [],
@@ -306,10 +329,9 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Delete file error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to delete file",
-      error: error.message,
+      message: error.message || "Failed to delete file",
     });
   }
 });

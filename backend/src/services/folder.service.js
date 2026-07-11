@@ -33,13 +33,13 @@ const listFolders = async (authClient, { parentFolderId }) => {
 
   const response = await drive.files.list({
     q: [
-      `mimeType='${FOLDER_MIME_TYPE}'`,
       `'${escapeDriveQueryValue(parentFolderId)}' in parents`,
       "trashed=false",
+      `mimeType='${FOLDER_MIME_TYPE}'`,
     ].join(" and "),
     spaces: "drive",
     fields: "files(id, name, mimeType, parents, createdTime, modifiedTime)",
-    orderBy: "name",
+    orderBy: "modifiedTime desc",
   });
 
   return response.data.files || [];
@@ -62,7 +62,18 @@ const renameFolder = async (authClient, { folderId, name }) => {
 const deleteFolder = async (authClient, { folderId }) => {
   const drive = getDriveClient(authClient);
 
-  // Safer than permanent delete: moves folder to Google Drive trash.
+  const metadataResponse = await drive.files.get({
+    fileId: folderId,
+    fields: "id, name, trashed",
+  });
+
+  if (metadataResponse.data.trashed) {
+    return {
+      ...metadataResponse.data,
+      alreadyTrashed: true,
+    };
+  }
+
   const response = await drive.files.update({
     fileId: folderId,
     requestBody: {
@@ -71,7 +82,10 @@ const deleteFolder = async (authClient, { folderId }) => {
     fields: "id, name, trashed",
   });
 
-  return response.data;
+  return {
+    ...response.data,
+    alreadyTrashed: false,
+  };
 };
 
 module.exports = {

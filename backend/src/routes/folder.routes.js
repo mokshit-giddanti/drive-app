@@ -11,6 +11,11 @@ const {
   deleteFolder,
 } = require("../services/folder.service");
 
+const {
+  assertUserContentAccess,
+  isProtectedVaultFolder,
+} = require("../services/driveGuard.service");
+
 const router = express.Router();
 
 const getUserAuthClient = (user) => {
@@ -46,6 +51,8 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
+    await assertUserContentAccess(authClient, req.user, finalParentFolderId);
+
     const folder = await createFolder(authClient, {
       name: name.trim(),
       parentFolderId: finalParentFolderId,
@@ -69,10 +76,9 @@ router.post("/", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Create folder error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to create folder",
-      error: error.message,
+      message: error.message || "Failed to create folder",
     });
   }
 });
@@ -93,6 +99,8 @@ router.get("/", authMiddleware, async (req, res) => {
       });
     }
 
+    await assertUserContentAccess(authClient, req.user, finalParentFolderId);
+
     const folders = await listFolders(authClient, {
       parentFolderId: finalParentFolderId,
     });
@@ -105,10 +113,9 @@ router.get("/", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("List folders error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to list folders",
-      error: error.message,
+      message: error.message || "Failed to list folders",
     });
   }
 });
@@ -125,7 +132,16 @@ router.patch("/:folderId", authMiddleware, async (req, res) => {
       });
     }
 
+    if (isProtectedVaultFolder(req.user, folderId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Protected vault folders cannot be renamed.",
+      });
+    }
+
     const authClient = getUserAuthClient(req.user);
+
+    await assertUserContentAccess(authClient, req.user, folderId);
 
     const folder = await renameFolder(authClient, {
       folderId,
@@ -149,10 +165,9 @@ router.patch("/:folderId", authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Rename folder error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to rename folder",
-      error: error.message,
+      message: error.message || "Failed to rename folder",
     });
   }
 });
@@ -161,32 +176,48 @@ router.delete("/:folderId", authMiddleware, async (req, res) => {
   try {
     const { folderId } = req.params;
 
+    if (isProtectedVaultFolder(req.user, folderId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Protected vault folders cannot be deleted.",
+      });
+    }
+
     const authClient = getUserAuthClient(req.user);
+
+    await assertUserContentAccess(authClient, req.user, folderId, {
+      allowTrashed: true,
+    });
 
     const folder = await deleteFolder(authClient, {
       folderId,
     });
 
-    await writeDailyLog(authClient, req.user.driveFolders.logs, {
-      action: "FOLDER_DELETE",
-      status: "SUCCESS",
-      userId: String(req.user._id),
-      email: req.user.email,
-      folderId,
-    });
+    if (!folder.alreadyTrashed) {
+      await writeDailyLog(authClient, req.user.driveFolders.logs, {
+        action: "FOLDER_DELETE",
+        status: "SUCCESS",
+        userId: String(req.user._id),
+        email: req.user.email,
+        folderId,
+        folderName: folder.name,
+      });
+    }
 
     res.json({
       success: true,
-      message: "Folder moved to trash successfully",
+      message: folder.alreadyTrashed
+        ? "Folder was already in trash"
+        : "Folder moved to trash successfully",
+      alreadyTrashed: folder.alreadyTrashed,
       folder,
     });
   } catch (error) {
     console.error("Delete folder error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to delete folder",
-      error: error.message,
+      message: error.message || "Failed to delete folder",
     });
   }
 });

@@ -112,7 +112,18 @@ const renameFile = async (authClient, { fileId, name }) => {
 const deleteFile = async (authClient, { fileId }) => {
   const drive = getDriveClient(authClient);
 
-  // Safer delete: move file to Google Drive trash.
+  const metadataResponse = await drive.files.get({
+    fileId,
+    fields: "id, name, trashed",
+  });
+
+  if (metadataResponse.data.trashed) {
+    return {
+      ...metadataResponse.data,
+      alreadyTrashed: true,
+    };
+  }
+
   const response = await drive.files.update({
     fileId,
     requestBody: {
@@ -121,7 +132,10 @@ const deleteFile = async (authClient, { fileId }) => {
     fields: "id, name, trashed",
   });
 
-  return response.data;
+  return {
+    ...response.data,
+    alreadyTrashed: false,
+  };
 };
 
 module.exports = {
