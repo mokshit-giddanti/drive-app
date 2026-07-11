@@ -44,6 +44,18 @@ const getBackendUrl = (req) => {
   return process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
 };
 
+// const createAppToken = (user, authProvider) => {
+//   return jwt.sign(
+//     {
+//       userId: user._id,
+//       googleId: user.googleId,
+//       email: user.email,
+//       authProvider,
+//     },
+//     process.env.JWT_SECRET,
+//     { expiresIn: "7d" }
+//   );
+// };
 const createAppToken = (user, authProvider) => {
   return jwt.sign(
     {
@@ -51,12 +63,12 @@ const createAppToken = (user, authProvider) => {
       googleId: user.googleId,
       email: user.email,
       authProvider,
+      tokenVersion: user.tokenVersion || 0,
     },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
 };
-
 const getUserAuthClient = (user) => {
   const authClient = createOAuth2Client();
 
@@ -350,6 +362,51 @@ app.post("/api/auth/login", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Login failed",
+      error: error.message,
+    });
+  }
+});
+app.post("/api/auth/logout", authMiddleware, async (req, res) => {
+  try {
+    const dbUser = await User.findByIdAndUpdate(
+      req.user._id,
+      {
+        $inc: {
+          tokenVersion: 1,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    const authClient = getUserAuthClient(req.user);
+
+    try {
+      await writeDailyLog(authClient, req.user.driveFolders.logs, {
+        action: "LOGOUT",
+        status: "SUCCESS",
+        userId: String(req.user._id),
+        email: req.user.email,
+      });
+    } catch (logError) {
+      console.error("Logout log failed:", logError.message);
+    }
+
+    res.json({
+      success: true,
+      message: "Logged out successfully",
+      tokenRevoked: true,
+      tokenVersion: dbUser.tokenVersion,
+      nextAction: "LOGIN",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Logout failed",
       error: error.message,
     });
   }

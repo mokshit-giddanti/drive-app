@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema(
       required: true,
       lowercase: true,
       trim: true,
+      index: true,
     },
 
     name: {
@@ -34,6 +35,11 @@ const userSchema = new mongoose.Schema(
     passwordHash: {
       type: String,
       default: "",
+    },
+
+    tokenVersion: {
+      type: Number,
+      default: 0,
     },
 
     driveFolders: {
@@ -57,7 +63,6 @@ const userSchema = new mongoose.Schema(
 
     lastLoginAt: {
       type: Date,
-      default: Date.now,
     },
   },
   {
