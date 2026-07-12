@@ -88,11 +88,29 @@ app.get("/", (req, res) => {
   });
 });
 
+// app.get("/api/auth/google", (req, res) => {
+//   const authUrl = oauth2Client.generateAuthUrl({
+//     access_type: "offline",
+//     prompt: "consent",
+//     scope: googleScopes,
+//   });
+
+//   res.redirect(authUrl);
+// });
 app.get("/api/auth/google", (req, res) => {
+  const mode = req.query.mode || "login";
+
+  const state = Buffer.from(
+    JSON.stringify({
+      mode,
+    })
+  ).toString("base64url");
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: googleScopes,
+    state,
   });
 
   res.redirect(authUrl);
@@ -176,24 +194,48 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
     const hasPassword = Boolean(dbUser.passwordHash);
 
-    res.json({
-      success: true,
-      message: "Google login successful",
-      user: {
-        id: dbUser._id,
-        googleId: dbUser.googleId,
-        email: dbUser.email,
-        name: dbUser.name,
-        picture: dbUser.picture,
-      },
-      driveFolders: dbUser.driveFolders,
-      token: appToken,
-      hasGoogleRefreshToken: Boolean(dbUser.googleRefreshToken),
-      receivedNewRefreshToken: Boolean(tokens.refresh_token),
-      hasPassword,
-      requiresPasswordSetup: !hasPassword,
-      nextAction: hasPassword ? "GO_TO_DASHBOARD" : "SET_PASSWORD",
-    });
+    // res.json({
+    //   success: true,
+    //   message: "Google login successful",
+    //   user: {
+    //     id: dbUser._id,
+    //     googleId: dbUser.googleId,
+    //     email: dbUser.email,
+    //     name: dbUser.name,
+    //     picture: dbUser.picture,
+    //   },
+    //   driveFolders: dbUser.driveFolders,
+    //   token: appToken,
+    //   hasGoogleRefreshToken: Boolean(dbUser.googleRefreshToken),
+    //   receivedNewRefreshToken: Boolean(tokens.refresh_token),
+    //   hasPassword,
+    //   requiresPasswordSetup: !hasPassword,
+    //   nextAction: hasPassword ? "GO_TO_DASHBOARD" : "SET_PASSWORD",
+    // });
+  let mode = "login";
+
+try {
+  if (req.query.state) {
+    const parsedState = JSON.parse(
+      Buffer.from(req.query.state, "base64url").toString("utf8")
+    );
+
+    mode = parsedState.mode || "login";
+  }
+} catch {
+  mode = "login";
+}
+
+const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+
+const nextPath =
+  mode === "reset" || !hasPassword ? "/set-password" : "/dashboard";
+
+const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(
+  appToken
+)}&next=${encodeURIComponent(nextPath)}`;
+
+return res.redirect(redirectUrl);
   } catch (error) {
     console.error("Google OAuth Error:", error);
 
@@ -414,6 +456,21 @@ app.post("/api/auth/logout", authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/api/auth/me", authMiddleware, async (req, res) => {
+  res.json({
+    success: true,
+    user: {
+      id: req.user._id,
+      googleId: req.user.googleId,
+      email: req.user.email,
+      name: req.user.name,
+      picture: req.user.picture,
+    },
+    driveFolders: req.user.driveFolders,
+    authProvider: req.auth.authProvider,
+    hasPassword: Boolean(req.user.passwordHash),
+  });
+});
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
