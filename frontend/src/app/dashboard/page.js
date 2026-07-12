@@ -97,6 +97,23 @@ const getLogTarget = (log) => {
 
   return "Vault activity";
 };
+const getLogLocation = (log) => {
+  if (log.action !== "FILE_UPLOAD") return null;
+
+  if (log.uploadLocationType === "uploads_root") {
+    return "Uploaded directly in Uploads";
+  }
+
+  if (log.uploadLocationType === "folder" && log.parentFolderName) {
+    return `Uploaded inside folder: ${log.parentFolderName}`;
+  }
+
+  if (log.parentFolderId) {
+    return `Uploaded inside folder ID: ${log.parentFolderId}`;
+  }
+
+  return "Upload location not available";
+};
 
 export default function DashboardPage() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -534,7 +551,9 @@ export default function DashboardPage() {
 
       {!loading &&
         logs.map((log, index) => {
+          // const target = getLogTarget(log);
           const target = getLogTarget(log);
+const location = getLogLocation(log);
 
           return (
             <div
@@ -552,9 +571,18 @@ export default function DashboardPage() {
                     {log.action || "UNKNOWN"}
                   </span>
 
-                  <p className="mt-3 font-semibold text-white truncate">
+                  {/* <p className="mt-3 font-semibold text-white truncate">
                     {target}
-                  </p>
+                  </p> */}
+                  <p className="mt-3 font-semibold text-white truncate">
+  {target}
+</p>
+
+{location && (
+  <p className="text-blue-300/80 text-sm mt-1 truncate">
+    {location}
+  </p>
+)}
 
                   <p className="text-white/45 text-xs mt-2">
                     {log.timestamp
