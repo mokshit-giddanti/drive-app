@@ -1,66 +1,788 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import {
+  Activity,
+  Database,
+  FileText,
+  Folder,
+  HardDrive,
+  History,
+  Home,
+  LogOut,
+  Menu,
+  RefreshCw,
+  ShieldCheck,
+  UploadCloud,
+  User,
+  X,
+} from "lucide-react";
+
+import {
+  apiClient,
+  authHeaders,
+  clearAuth,
+  formatBytes,
+  getSavedUser,
+  getToken,
+  handleAuthError,
+} from "@/lib/api";
+
+const navItems = [
+  {
+    label: "Overview",
+    href: "/dashboard",
+    icon: Home,
+    active: true,
+  },
+  {
+    label: "Files",
+    href: "/dashboard/files",
+    icon: FileText,
+    active: false,
+  },
+  {
+    label: "Folders",
+    href: "/dashboard",
+    icon: Folder,
+    active: false,
+  },
+  {
+    label: "Storage",
+    href: "/dashboard",
+    icon: HardDrive,
+    active: false,
+  },
+  {
+    label: "Activity Logs",
+    href: "/dashboard",
+    icon: History,
+    active: false,
+  },
+];
+
+const actionColorMap = {
+  GOOGLE_LOGIN_SUCCESS: "bg-blue-500/15 text-blue-300",
+  PASSWORD_LOGIN_SUCCESS: "bg-green-500/15 text-green-300",
+  PASSWORD_SET_OR_RESET: "bg-purple-500/15 text-purple-300",
+  LOGOUT: "bg-red-500/15 text-red-300",
+  FILE_UPLOAD: "bg-blue-500/15 text-blue-300",
+  FILE_DOWNLOAD: "bg-cyan-500/15 text-cyan-300",
+  FILE_RENAME: "bg-yellow-500/15 text-yellow-300",
+  FILE_DELETE: "bg-red-500/15 text-red-300",
+  FOLDER_CREATE: "bg-green-500/15 text-green-300",
+  FOLDER_RENAME: "bg-yellow-500/15 text-yellow-300",
+  FOLDER_DELETE: "bg-red-500/15 text-red-300",
+  STORAGE_CHECK: "bg-indigo-500/15 text-indigo-300",
+};
+const getLogTarget = (log) => {
+  if (log.fileName) return `File: ${log.fileName}`;
+  if (log.folderName) return `Folder: ${log.folderName}`;
+
+  if (log.fileId) return `File ID: ${log.fileId}`;
+  if (log.folderId) return `Folder ID: ${log.folderId}`;
+
+  if (log.alertsTriggered?.length) {
+    return `Storage alert: ${log.alertsTriggered
+      .map((item) => `${item.threshold}%`)
+      .join(", ")}`;
+  }
+
+  if (log.usedPercent !== undefined) {
+    return `Storage checked: ${log.usedPercent}% used`;
+  }
+
+  if (log.email) return log.email;
+
+  return "Vault activity";
+};
 
 export default function DashboardPage() {
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [user, setUser] = useState(null);
+  const [storage, setStorage] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [filesCount, setFilesCount] = useState(0);
+  const [foldersCount, setFoldersCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [logoutLoading, setLogoutLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    const token = localStorage.getItem("drive_app_token");
-    const savedUser = localStorage.getItem("drive_app_user");
+  const loadDashboard = async () => {
+    try {
+      setLoading(true);
+      setError("");
 
-    if (!token) {
-      window.location.href = "/";
-      return;
+      const token = getToken();
+
+      if (!token) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const savedUser = getSavedUser();
+
+      if (savedUser) {
+        setUser(savedUser);
+      }
+
+      const [meRes, storageRes, logsRes, filesRes, foldersRes] =
+        await Promise.all([
+          apiClient.get("/api/auth/me", {
+            headers: authHeaders(),
+          }),
+          apiClient.get("/api/storage/status", {
+            headers: authHeaders(),
+          }),
+          apiClient.get("/api/logs?limit=6", {
+            headers: authHeaders(),
+          }),
+          apiClient.get("/api/files", {
+            headers: authHeaders(),
+          }),
+          apiClient.get("/api/folders", {
+            headers: authHeaders(),
+          }),
+        ]);
+
+      setUser(meRes.data.user);
+      localStorage.setItem("drive_app_user", JSON.stringify(meRes.data.user));
+
+      setStorage(storageRes.data.status);
+      setLogs(logsRes.data.logs || []);
+      setFilesCount(filesRes.data.count || 0);
+      setFoldersCount(foldersRes.data.count || 0);
+    } catch (error) {
+      if (handleAuthError(error)) return;
+
+      setError(error.response?.data?.message || "Failed to load dashboard.");
+    } finally {
+      setLoading(false);
     }
-
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-  }, []);
-
-  const handleLogout = () => {
-    localStorage.removeItem("drive_app_token");
-    localStorage.removeItem("drive_app_user");
-    window.location.href = "/";
   };
 
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      setLogoutLoading(true);
+
+      const token = getToken();
+
+      if (token) {
+        await apiClient.post(
+          "/api/auth/logout",
+          {},
+          {
+            headers: authHeaders(),
+          }
+        );
+      }
+    } catch {
+      // Even if backend logout fails, frontend should clear local session.
+    } finally {
+      clearAuth();
+      window.location.href = "/login";
+    }
+  };
+
+  const usedPercent = Number(storage?.usedPercent || 0);
+  const storageWidth = Math.min(Math.max(usedPercent, 0.5), 100);
+
   return (
-    <main className="min-h-screen bg-[#0B1020] text-white p-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-10">
-          <div>
-            <h1 className="text-3xl font-bold">Dashboard</h1>
-            <p className="text-white/60 mt-1">
-              Welcome {user?.name || "User"}
-            </p>
-          </div>
+    <main className="min-h-screen bg-[#07111f] text-white">
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-[-120px] left-[-120px] h-[360px] w-[360px] rounded-full bg-blue-600/15 blur-3xl" />
+        <div className="absolute bottom-[-180px] right-[-180px] h-[420px] w-[420px] rounded-full bg-cyan-500/10 blur-3xl" />
+      </div>
 
-          <button
-            onClick={handleLogout}
-            className="rounded-xl bg-red-500 px-5 py-2 font-semibold hover:bg-red-600 transition"
-          >
-            Logout
-          </button>
+      <div className="relative z-10 flex min-h-screen">
+        {/* <aside className="hidden lg:flex w-72 shrink-0 border-r border-white/10 bg-white/[0.04] p-5 flex-col"> */}
+          <aside className="hidden lg:flex w-64 shrink-0 border-r border-white/10 bg-white/[0.04] p-4 flex-col">
+          <SidebarContent
+            user={user}
+            onLogout={handleLogout}
+            logoutLoading={logoutLoading}
+          />
+        </aside>
+
+        {mobileSidebarOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <div
+              className="absolute inset-0 bg-black/60"
+              onClick={() => setMobileSidebarOpen(false)}
+            />
+            <aside className="relative h-full w-[86%] max-w-sm border-r border-white/10 bg-[#0b1020] p-5 flex flex-col">
+              <div className="flex justify-end mb-4">
+                <button
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className="h-10 w-10 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <SidebarContent
+                user={user}
+                onLogout={handleLogout}
+                logoutLoading={logoutLoading}
+              />
+            </aside>
+          </div>
+        )}
+
+        <section className="flex-1 min-w-0">
+          <header className="sticky top-0 z-30 border-b border-white/10 bg-[#07111f]/85 backdrop-blur">
+            <div className="px-5 sm:px-7 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setMobileSidebarOpen(true)}
+                  className="lg:hidden h-11 w-11 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center"
+                >
+                  <Menu size={21} />
+                </button>
+
+                <div>
+                  <h1 className="text-xl sm:text-2xl font-bold">Dashboard</h1>
+                  <p className="text-white/45 text-sm hidden sm:block">
+                    Manage your private Drive Vault.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={loadDashboard}
+                disabled={loading}
+                className="h-11 px-4 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 flex items-center gap-2 text-sm font-semibold disabled:opacity-60"
+              >
+                <RefreshCw size={17} className={loading ? "animate-spin" : ""} />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+            </div>
+          </header>
+
+          {/* <div className="p-5 sm:p-7"> */}
+          <div className="p-4 sm:p-6">
+            {error && (
+              <div className="mb-6 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-red-200">
+                {error}
+              </div>
+            )}
+
+            <section className="mb-7">
+              {/* <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 sm:p-8 overflow-hidden relative"> */}
+              <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 sm:p-6 overflow-hidden relative">  
+                <div className="absolute right-[-80px] top-[-80px] h-64 w-64 rounded-full bg-blue-500/15 blur-3xl" />
+
+                <div className="relative flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                  <div>
+                    <p className="text-blue-300 font-semibold mb-2">
+                      Welcome back
+                    </p>
+                    {/* <h2 className="text-3xl sm:text-4xl font-bold"> */}
+                    <h2 className="text-2xl sm:text-3xl font-bold">
+                      {user?.name || "Drive Vault User"}
+                    </h2>
+                    <p className="text-white/60 mt-3 max-w-2xl leading-7">
+                      Your backend is connected, authentication is active, and
+                      your Google Drive vault is ready to manage files.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <Link
+                      href="/dashboard"
+                      className="rounded-xl bg-blue-600 px-5 py-3 text-center font-bold hover:bg-blue-700 transition"
+                      // className="rounded-2xl bg-blue-600 px-6 py-4 text-center font-bold hover:bg-blue-700 transition"
+                    >
+                      Upload File
+                    </Link>
+
+                    <Link
+                      href="/dashboard"
+                      className="rounded-2xl border border-white/15 px-6 py-4 text-center font-bold hover:bg-white/10 transition"
+                    >
+                      View Logs
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 mb-7"> */}
+            <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+              <SummaryCard
+                title="Files"
+                value={loading ? "..." : filesCount}
+                subtitle="Files in uploads"
+                icon={FileText}
+              />
+
+              <SummaryCard
+                title="Folders"
+                value={loading ? "..." : foldersCount}
+                subtitle="Folders in uploads"
+                icon={Folder}
+              />
+
+              <SummaryCard
+                title="Storage Used"
+                value={loading ? "..." : `${usedPercent}%`}
+                subtitle={storage ? `${formatBytes(storage.usage)} used` : "Loading"}
+                icon={HardDrive}
+              />
+
+              <SummaryCard
+                title="Activity Logs"
+                value={loading ? "..." : logs.length}
+                subtitle="Recent events loaded"
+                icon={Activity}
+              />
+            </section>
+
+            {/* <section className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+              <div className="xl:col-span-2 rounded-[2rem] border border-white/10 bg-white/[0.06] p-6">
+                <div className="flex items-center justify-between gap-4 mb-6">
+                  <div>
+                    <h3 className="text-2xl font-bold">Storage Overview</h3>
+                    <p className="text-white/50 mt-1">
+                      Live Google Drive quota status.
+                    </p>
+                  </div>
+
+                  <div className="h-12 w-12 rounded-2xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center text-blue-300">
+                    <Database size={24} />
+                  </div>
+                </div>
+
+                <div className="grid sm:grid-cols-3 gap-4 mb-6">
+                  <MiniStat
+                    label="Used"
+                    value={storage ? formatBytes(storage.usage) : "..."}
+                  />
+                  <MiniStat
+                    label="Limit"
+                    value={storage ? formatBytes(storage.limit) : "..."}
+                  />
+                  <MiniStat
+                    label="Trash"
+                    value={
+                      storage ? formatBytes(storage.usageInDriveTrash) : "..."
+                    }
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-sm mb-3">
+                    <span className="text-white/60">Usage percentage</span>
+                    <span className="text-blue-300 font-bold">
+                      {storage ? `${usedPercent}%` : "..."}
+                    </span>
+                  </div>
+
+                  <div className="h-4 rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-blue-500 transition-all"
+                      style={{
+                        width: `${storageWidth}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6">
+                <div className="flex items-center justify-between gap-4 mb-6">
+                  <div>
+                    <h3 className="text-2xl font-bold">Recent Activity</h3>
+                    <p className="text-white/50 mt-1">Latest vault logs.</p>
+                  </div>
+
+                  <div className="h-12 w-12 rounded-2xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center text-blue-300">
+                    <History size={24} />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {loading && (
+                    <>
+                      <SkeletonLog />
+                      <SkeletonLog />
+                      <SkeletonLog />
+                    </>
+                  )}
+
+                  {!loading && logs.length === 0 && (
+                    <div className="rounded-2xl bg-black/20 border border-white/10 p-4 text-white/50 text-sm">
+                      No logs found yet.
+                    </div>
+                  )}
+
+                  {!loading &&
+                    logs.map((log, index) => (
+                      <div
+                        key={`${log.timestamp}-${index}`}
+                        className="rounded-2xl bg-black/20 border border-white/10 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <span
+                              className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${
+                                actionColorMap[log.action] ||
+                                "bg-white/10 text-white/70"
+                              }`}
+                            >
+                              {log.action || "UNKNOWN"}
+                            </span>
+
+                            <p className="text-white/45 text-xs mt-3">
+                              {log.timestamp
+                                ? new Date(log.timestamp).toLocaleString()
+                                : "No timestamp"}
+                            </p>
+                          </div>
+
+                          <span className="text-xs text-green-300">
+                            {log.status || "SUCCESS"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </section> */}
+            <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+  <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5">
+    <div className="flex items-center justify-between gap-4 mb-5">
+      <div>
+        <h3 className="text-xl font-bold">Storage Overview</h3>
+        <p className="text-white/50 mt-1 text-sm">
+          Live Google Drive quota status.
+        </p>
+      </div>
+
+      <div className="h-11 w-11 rounded-xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center text-blue-300">
+        <Database size={22} />
+      </div>
+    </div>
+
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+      <MiniStat
+        label="Used"
+        value={storage ? formatBytes(storage.usage) : "..."}
+      />
+      <MiniStat
+        label="Limit"
+        value={storage ? formatBytes(storage.limit) : "..."}
+      />
+      <MiniStat
+        label="Trash"
+        value={storage ? formatBytes(storage.usageInDriveTrash) : "..."}
+      />
+    </div>
+
+    <div>
+      <div className="flex justify-between text-sm mb-3">
+        <span className="text-white/60">Usage percentage</span>
+        <span className="text-blue-300 font-bold">
+          {storage ? `${usedPercent}%` : "..."}
+        </span>
+      </div>
+
+      <div className="h-3 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-blue-500 transition-all"
+          style={{
+            width: `${storageWidth}%`,
+          }}
+        />
+      </div>
+    </div>
+  </div>
+
+  <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5">
+    <div className="flex items-center justify-between gap-4 mb-5">
+      <div>
+        <h3 className="text-xl font-bold">Recent Activity</h3>
+        <p className="text-white/50 mt-1 text-sm">
+          Latest vault operations with target names.
+        </p>
+      </div>
+
+      <div className="h-11 w-11 rounded-xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center text-blue-300">
+        <History size={22} />
+      </div>
+    </div>
+
+    <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+      {loading && (
+        <>
+          <SkeletonLog />
+          <SkeletonLog />
+          <SkeletonLog />
+        </>
+      )}
+
+      {!loading && logs.length === 0 && (
+        <div className="rounded-2xl bg-black/20 border border-white/10 p-4 text-white/50 text-sm">
+          No logs found yet.
         </div>
+      )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          <div className="rounded-2xl bg-white/10 border border-white/10 p-6">
-            <h2 className="text-lg font-semibold">Files</h2>
-            <p className="text-white/50 mt-2">File manager coming next.</p>
-          </div>
+      {!loading &&
+        logs.map((log, index) => {
+          const target = getLogTarget(log);
 
-          <div className="rounded-2xl bg-white/10 border border-white/10 p-6">
-            <h2 className="text-lg font-semibold">Storage</h2>
-            <p className="text-white/50 mt-2">Storage card coming next.</p>
-          </div>
+          return (
+            <div
+              key={`${log.timestamp}-${index}`}
+              className="rounded-2xl bg-black/20 border border-white/10 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span
+                    className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${
+                      actionColorMap[log.action] ||
+                      "bg-white/10 text-white/70"
+                    }`}
+                  >
+                    {log.action || "UNKNOWN"}
+                  </span>
 
-          <div className="rounded-2xl bg-white/10 border border-white/10 p-6">
-            <h2 className="text-lg font-semibold">Logs</h2>
-            <p className="text-white/50 mt-2">Activity logs coming next.</p>
+                  <p className="mt-3 font-semibold text-white truncate">
+                    {target}
+                  </p>
+
+                  <p className="text-white/45 text-xs mt-2">
+                    {log.timestamp
+                      ? new Date(log.timestamp).toLocaleString()
+                      : "No timestamp"}
+                  </p>
+                </div>
+
+                <span className="text-xs text-green-300 shrink-0">
+                  {log.status || "SUCCESS"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+    </div>
+  </div>
+</section>
           </div>
-        </div>
+        </section>
       </div>
     </main>
+  );
+}
+
+// function SidebarContent({ user, onLogout, logoutLoading }) {
+//   return (
+//     <>
+//       <div className="flex items-center gap-3 mb-8">
+//         <div className="h-12 w-12 rounded-2xl bg-blue-500 flex items-center justify-center text-xl font-bold">
+//           D
+//         </div>
+//         <div>
+//           <h2 className="font-bold text-lg">Drive Vault</h2>
+//           <p className="text-white/40 text-sm">Private dashboard</p>
+//         </div>
+//       </div>
+
+//       <div className="rounded-3xl bg-white/[0.06] border border-white/10 p-4 mb-6">
+//         <div className="flex items-center gap-3">
+//           {user?.picture ? (
+//             <img
+//               src={user.picture}
+//               alt={user.name}
+//               className="h-11 w-11 rounded-full"
+//             />
+//           ) : (
+//             <div className="h-11 w-11 rounded-full bg-white/10 flex items-center justify-center">
+//               <User size={21} />
+//             </div>
+//           )}
+
+//           <div className="min-w-0">
+//             <p className="font-semibold truncate">{user?.name || "User"}</p>
+//             <p className="text-white/40 text-sm truncate">
+//               {user?.email || "No email"}
+//             </p>
+//           </div>
+//         </div>
+//       </div>
+
+//       <nav className="space-y-2 flex-1">
+//         {navItems.map(({ label, href, icon: Icon, active }) => (
+//           <Link
+//             key={label}
+//             href={href}
+//             className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+//               active
+//                 ? "bg-blue-600 text-white"
+//                 : "text-white/60 hover:text-white hover:bg-white/10"
+//             }`}
+//           >
+//             <Icon size={19} />
+//             {label}
+//           </Link>
+//         ))}
+//       </nav>
+
+//       <div className="pt-6 border-t border-white/10">
+//         <div className="flex items-center gap-2 text-white/45 text-sm mb-4">
+//           <ShieldCheck size={17} />
+//           Session protected
+//         </div>
+
+//         <button
+//           onClick={onLogout}
+//           disabled={logoutLoading}
+//           className="w-full rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-red-200 font-bold hover:bg-red-500/20 transition flex items-center justify-center gap-2 disabled:opacity-60"
+//         >
+//           <LogOut size={18} />
+//           {logoutLoading ? "Logging out..." : "Logout"}
+//         </button>
+//       </div>
+//     </>
+//   );
+// }
+function SidebarContent({ user, onLogout, logoutLoading }) {
+  return (
+    <>
+      <div className="flex items-center gap-3 mb-6">
+        <div className="h-11 w-11 rounded-2xl bg-blue-500 flex items-center justify-center text-lg font-bold">
+          D
+        </div>
+
+        <div>
+          <h2 className="font-bold text-lg">Drive Vault</h2>
+          <p className="text-white/40 text-sm">Private dashboard</p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl bg-white/[0.06] border border-white/10 p-3 mb-5">
+        <div className="flex items-center gap-3">
+          <Avatar user={user} />
+
+          <div className="min-w-0 flex-1">
+            <p className="font-bold truncate">{user?.name || "User"}</p>
+            <p className="text-white/40 text-xs truncate">
+              {user?.email || "No email"}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={onLogout}
+          disabled={logoutLoading}
+          className="mt-4 w-full rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-2.5 text-red-200 text-sm font-bold hover:bg-red-500/20 transition flex items-center justify-center gap-2 disabled:opacity-60"
+        >
+          <LogOut size={16} />
+          {logoutLoading ? "Logging out..." : "Logout"}
+        </button>
+      </div>
+
+      <nav className="space-y-2">
+        {navItems.map(({ label, href, icon: Icon, active }) => (
+          <Link
+            key={label}
+            href={href}
+            className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              active
+                ? "bg-blue-600 text-white"
+                : "text-white/60 hover:text-white hover:bg-white/10"
+            }`}
+          >
+            <Icon size={18} />
+            {label}
+          </Link>
+        ))}
+      </nav>
+
+      <div className="mt-5 rounded-xl bg-green-500/10 border border-green-400/15 px-4 py-3 flex items-center gap-2 text-green-200 text-xs">
+        <ShieldCheck size={15} />
+        Session protected
+      </div>
+    </>
+  );
+}
+function Avatar({ user }) {
+  const [imageError, setImageError] = useState(false);
+
+  if (user?.picture && !imageError) {
+    return (
+      <img
+        src={user.picture}
+        alt={user?.name || "User"}
+        referrerPolicy="no-referrer"
+        onError={() => setImageError(true)}
+        className="h-11 w-11 rounded-full object-cover border border-white/10 bg-white/10"
+      />
+    );
+  }
+
+  return (
+    <div className="h-11 w-11 rounded-full bg-blue-500 flex items-center justify-center font-bold">
+      {user?.name?.charAt(0)?.toUpperCase() || "U"}
+    </div>
+  );
+}
+
+// function SummaryCard({ title, value, subtitle, icon: Icon }) {
+//   return (
+//     <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.06] p-6 hover:bg-white/[0.08] transition">
+//       <div className="h-12 w-12 rounded-2xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center text-blue-300 mb-5">
+//         <Icon size={24} />
+//       </div>
+
+//       <p className="text-white/50 text-sm">{title}</p>
+//       <h3 className="text-3xl font-bold mt-2">{value}</h3>
+//       <p className="text-white/40 text-sm mt-2">{subtitle}</p>
+//     </div>
+//   );
+// }
+function SummaryCard({ title, value, subtitle, icon: Icon }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5 hover:bg-white/[0.08] transition">
+      <div className="h-11 w-11 rounded-xl bg-blue-500/15 border border-blue-400/20 flex items-center justify-center text-blue-300 mb-4">
+        <Icon size={22} />
+      </div>
+
+      <p className="text-white/50 text-sm">{title}</p>
+      <h3 className="text-2xl font-bold mt-2">{value}</h3>
+      <p className="text-white/40 text-sm mt-1">{subtitle}</p>
+    </div>
+  );
+}
+
+// function MiniStat({ label, value }) {
+//   return (
+//     <div className="rounded-2xl bg-black/20 border border-white/10 p-4">
+//       <p className="text-white/45 text-sm">{label}</p>
+//       <p className="font-bold text-lg mt-2">{value}</p>
+//     </div>
+//   );
+// }
+
+function MiniStat({ label, value }) {
+  return (
+    <div className="rounded-xl bg-black/20 border border-white/10 p-4">
+      <p className="text-white/45 text-xs">{label}</p>
+      <p className="font-bold text-base mt-2">{value}</p>
+    </div>
+  );
+}
+
+function SkeletonLog() {
+  return (
+    <div className="rounded-2xl bg-black/20 border border-white/10 p-4 animate-pulse">
+      <div className="h-5 w-32 bg-white/10 rounded-full mb-4" />
+      <div className="h-4 w-44 bg-white/10 rounded-full" />
+    </div>
   );
 }

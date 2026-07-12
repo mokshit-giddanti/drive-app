@@ -6,7 +6,12 @@ const upload = require("../middleware/upload.middleware");
 const { createOAuth2Client } = require("../config/google");
 const { writeDailyLog } = require("../services/log.service");
 const { checkStorageAlerts } = require("../services/storage.service");
-const { assertUserContentAccess } = require("../services/driveGuard.service");
+// const { getFileMetadata } = require("../services/driveGuard.service");
+// const { assertUserContentAccess } = require("../services/driveGuard.service");
+const {
+  assertUserContentAccess,
+  getFileMetadata,
+} = require("../services/driveGuard.service");
 
 const {
   uploadFile,
@@ -94,17 +99,51 @@ router.post(
         parentFolderId: finalParentFolderId,
       });
 
-      await writeDailyLog(authClient, req.user.driveFolders.logs, {
-        action: "FILE_UPLOAD",
-        status: "SUCCESS",
-        userId: String(req.user._id),
-        email: req.user.email,
-        fileId: uploadedFile.id,
-        fileName: uploadedFile.name,
-        mimeType: uploadedFile.mimeType,
-        size: uploadedFile.size || req.file.size,
-        parentFolderId: finalParentFolderId,
-      });
+      // await writeDailyLog(authClient, req.user.driveFolders.logs, {
+      //   action: "FILE_UPLOAD",
+      //   status: "SUCCESS",
+      //   userId: String(req.user._id),
+      //   email: req.user.email,
+      //   fileId: uploadedFile.id,
+      //   fileName: uploadedFile.name,
+      //   mimeType: uploadedFile.mimeType,
+      //   size: uploadedFile.size || req.file.size,
+      //   parentFolderId: finalParentFolderId,
+      // });
+let parentFolderName = "Uploads";
+let uploadLocationType = "uploads_root";
+
+try {
+  if (
+    finalParentFolderId &&
+    finalParentFolderId !== req.user.driveFolders?.uploads
+  ) {
+    const parentMetadata = await getFileMetadata(
+      authClient,
+      finalParentFolderId
+    );
+
+    parentFolderName = parentMetadata.name || "Unknown Folder";
+    uploadLocationType = "folder";
+  }
+} catch {
+  parentFolderName = "Unknown Folder";
+  uploadLocationType = "folder";
+}
+
+await writeDailyLog(authClient, req.user.driveFolders.logs, {
+  action: "FILE_UPLOAD",
+  status: "SUCCESS",
+  userId: String(req.user._id),
+  email: req.user.email,
+  fileId: uploadedFile.id,
+  fileName: uploadedFile.name,
+  mimeType: uploadedFile.mimeType,
+  size: uploadedFile.size || req.file.size,
+  parentFolderId: finalParentFolderId,
+  parentFolderName,
+  uploadLocationType,
+});
 
       const storageAlertResult = await runStorageAlertCheck(
         authClient,
