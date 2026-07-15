@@ -6,8 +6,7 @@ const upload = require("../middleware/upload.middleware");
 const { createOAuth2Client } = require("../config/google");
 const { writeDailyLog } = require("../services/log.service");
 const { checkStorageAlerts } = require("../services/storage.service");
-// const { getFileMetadata } = require("../services/driveGuard.service");
-// const { assertUserContentAccess } = require("../services/driveGuard.service");
+
 const {
   assertUserContentAccess,
   getFileMetadata,
@@ -34,6 +33,51 @@ const getUserAuthClient = (user) => {
   return authClient;
 };
 
+const getFolderLocationInfo = async (authClient, user, parentFolderId) => {
+  try {
+    if (!parentFolderId || parentFolderId === user.driveFolders?.uploads) {
+      return {
+        parentFolderId: user.driveFolders?.uploads || null,
+        parentFolderName: "Vault Root",
+        locationType: "vault_root",
+        uploadLocationType: "uploads_root",
+      };
+    }
+
+    const parentMetadata = await getFileMetadata(authClient, parentFolderId);
+
+    return {
+      parentFolderId,
+      parentFolderName: parentMetadata.name || "Unknown Folder",
+      locationType: "folder",
+      uploadLocationType: "folder",
+    };
+  } catch {
+    return {
+      parentFolderId: parentFolderId || null,
+      parentFolderName: "Unknown Folder",
+      locationType: "unknown",
+      uploadLocationType: "folder",
+    };
+  }
+};
+
+const getFileLocationInfo = async (authClient, user, fileId) => {
+  try {
+    const metadata = await getFileMetadata(authClient, fileId);
+    const parentFolderId = metadata.parents?.[0] || null;
+
+    return await getFolderLocationInfo(authClient, user, parentFolderId);
+  } catch {
+    return {
+      parentFolderId: null,
+      parentFolderName: "Unknown Folder",
+      locationType: "unknown",
+      uploadLocationType: "folder",
+    };
+  }
+};
+
 const runStorageAlertCheck = async (authClient, user) => {
   try {
     const result = await checkStorageAlerts(
@@ -44,6 +88,17 @@ const runStorageAlertCheck = async (authClient, user) => {
       }
     );
 
+    await writeDailyLog(authClient, user.driveFolders.logs, {
+      action: "STORAGE_CHECK",
+      status: "SUCCESS",
+      userId: String(user._id),
+      email: user.email,
+      usage: result.status?.usage,
+      limit: result.status?.limit,
+      usageInDriveTrash: result.status?.usageInDriveTrash,
+      usedPercent: result.status?.usedPercent,
+    });
+
     if (result.alertsTriggered.length > 0) {
       await writeDailyLog(authClient, user.driveFolders.logs, {
         action: "STORAGE_ALERT_TRIGGERED",
@@ -52,6 +107,10 @@ const runStorageAlertCheck = async (authClient, user) => {
         email: user.email,
         alertsTriggered: result.alertsTriggered,
         emailResults: result.emailResults,
+        usage: result.status?.usage,
+        limit: result.status?.limit,
+        usageInDriveTrash: result.status?.usageInDriveTrash,
+        usedPercent: result.status?.usedPercent,
       });
     }
 
@@ -89,7 +148,6 @@ router.post(
         });
       }
 
-      // ownership/access check before uploading into any folder
       await assertUserContentAccess(authClient, req.user, finalParentFolderId);
 
       const uploadedFile = await uploadFile(authClient, {
@@ -99,51 +157,26 @@ router.post(
         parentFolderId: finalParentFolderId,
       });
 
-      // await writeDailyLog(authClient, req.user.driveFolders.logs, {
-      //   action: "FILE_UPLOAD",
-      //   status: "SUCCESS",
-      //   userId: String(req.user._id),
-      //   email: req.user.email,
-      //   fileId: uploadedFile.id,
-      //   fileName: uploadedFile.name,
-      //   mimeType: uploadedFile.mimeType,
-      //   size: uploadedFile.size || req.file.size,
-      //   parentFolderId: finalParentFolderId,
-      // });
-let parentFolderName = "Uploads";
-let uploadLocationType = "uploads_root";
+      const locationInfo = await getFolderLocationInfo(
+        authClient,
+        req.user,
+        finalParentFolderId
+      );
 
-try {
-  if (
-    finalParentFolderId &&
-    finalParentFolderId !== req.user.driveFolders?.uploads
-  ) {
-    const parentMetadata = await getFileMetadata(
-      authClient,
-      finalParentFolderId
-    );
-
-    parentFolderName = parentMetadata.name || "Unknown Folder";
-    uploadLocationType = "folder";
-  }
-} catch {
-  parentFolderName = "Unknown Folder";
-  uploadLocationType = "folder";
-}
-
-await writeDailyLog(authClient, req.user.driveFolders.logs, {
-  action: "FILE_UPLOAD",
-  status: "SUCCESS",
-  userId: String(req.user._id),
-  email: req.user.email,
-  fileId: uploadedFile.id,
-  fileName: uploadedFile.name,
-  mimeType: uploadedFile.mimeType,
-  size: uploadedFile.size || req.file.size,
-  parentFolderId: finalParentFolderId,
-  parentFolderName,
-  uploadLocationType,
-});
+      await writeDailyLog(authClient, req.user.driveFolders.logs, {
+        action: "FILE_UPLOAD",
+        status: "SUCCESS",
+        userId: String(req.user._id),
+        email: req.user.email,
+        fileId: uploadedFile.id,
+        fileName: uploadedFile.name,
+        mimeType: uploadedFile.mimeType,
+        size: uploadedFile.size || req.file.size,
+        parentFolderId: locationInfo.parentFolderId,
+        parentFolderName: locationInfo.parentFolderName,
+        locationType: locationInfo.locationType,
+        uploadLocationType: locationInfo.uploadLocationType,
+      });
 
       const storageAlertResult = await runStorageAlertCheck(
         authClient,
@@ -184,7 +217,6 @@ router.get("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // ownership/access check before listing folder contents
     await assertUserContentAccess(authClient, req.user, finalParentFolderId);
 
     const files = await listFiles(authClient, {
@@ -212,8 +244,13 @@ router.get("/:fileId/download", authMiddleware, async (req, res) => {
 
     const authClient = getUserAuthClient(req.user);
 
-    // ownership/access check before download
     await assertUserContentAccess(authClient, req.user, fileId);
+
+    const locationInfo = await getFileLocationInfo(
+      authClient,
+      req.user,
+      fileId
+    );
 
     const { metadata, stream } = await downloadFile(authClient, {
       fileId,
@@ -228,6 +265,9 @@ router.get("/:fileId/download", authMiddleware, async (req, res) => {
       fileName: metadata.name,
       mimeType: metadata.mimeType,
       size: metadata.size,
+      parentFolderId: locationInfo.parentFolderId,
+      parentFolderName: locationInfo.parentFolderName,
+      locationType: locationInfo.locationType,
     });
 
     res.setHeader(
@@ -257,7 +297,6 @@ router.get("/:fileId", authMiddleware, async (req, res) => {
 
     const authClient = getUserAuthClient(req.user);
 
-    // ownership/access check before file details
     await assertUserContentAccess(authClient, req.user, fileId);
 
     const file = await getFileDetails(authClient, {
@@ -292,8 +331,14 @@ router.patch("/:fileId", authMiddleware, async (req, res) => {
 
     const authClient = getUserAuthClient(req.user);
 
-    // ownership/access check before rename
     await assertUserContentAccess(authClient, req.user, fileId);
+
+    const beforeRenameMetadata = await getFileMetadata(authClient, fileId);
+    const locationInfo = await getFolderLocationInfo(
+      authClient,
+      req.user,
+      beforeRenameMetadata.parents?.[0]
+    );
 
     const file = await renameFile(authClient, {
       fileId,
@@ -306,9 +351,13 @@ router.patch("/:fileId", authMiddleware, async (req, res) => {
       userId: String(req.user._id),
       email: req.user.email,
       fileId: file.id,
+      oldFileName: beforeRenameMetadata.name,
       fileName: file.name,
-      mimeType: file.mimeType,
-      size: file.size,
+      mimeType: file.mimeType || beforeRenameMetadata.mimeType,
+      size: file.size || beforeRenameMetadata.size,
+      parentFolderId: locationInfo.parentFolderId,
+      parentFolderName: locationInfo.parentFolderName,
+      locationType: locationInfo.locationType,
     });
 
     res.json({
@@ -332,16 +381,21 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
 
     const authClient = getUserAuthClient(req.user);
 
-    // allowTrashed true because duplicate delete should return alreadyTrashed
     await assertUserContentAccess(authClient, req.user, fileId, {
       allowTrashed: true,
     });
+
+    const beforeDeleteMetadata = await getFileMetadata(authClient, fileId);
+    const locationInfo = await getFolderLocationInfo(
+      authClient,
+      req.user,
+      beforeDeleteMetadata.parents?.[0]
+    );
 
     const file = await deleteFile(authClient, {
       fileId,
     });
 
-    // avoid duplicate delete log
     if (!file.alreadyTrashed) {
       await writeDailyLog(authClient, req.user.driveFolders.logs, {
         action: "FILE_DELETE",
@@ -349,7 +403,12 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
         userId: String(req.user._id),
         email: req.user.email,
         fileId,
-        fileName: file.name,
+        fileName: file.name || beforeDeleteMetadata.name,
+        mimeType: beforeDeleteMetadata.mimeType,
+        size: beforeDeleteMetadata.size,
+        parentFolderId: locationInfo.parentFolderId,
+        parentFolderName: locationInfo.parentFolderName,
+        locationType: locationInfo.locationType,
       });
     }
 

@@ -6,16 +6,20 @@ import RenameModal from "@/components/ui/RenameModal";
 import { useToast } from "@/components/ui/ToastProvider";
 
 import {
+  ArrowUpDown,
   ChevronRight,
   Download,
   FileText,
   Folder,
   FolderPlus,
+  Grid2X2,
   Home,
+  List,
   Loader2,
   Pencil,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Trash2,
   UploadCloud,
   X,
@@ -30,6 +34,31 @@ import {
 } from "@/lib/api";
 
 const ROOT_DISPLAY_NAME = "Vault Root";
+
+const sortItems = (items, sortBy) => {
+  const copiedItems = [...items];
+
+  if (sortBy === "name") {
+    return copiedItems.sort((a, b) =>
+      (a.name || "").localeCompare(b.name || "")
+    );
+  }
+
+  if (sortBy === "newest") {
+    return copiedItems.sort((a, b) => {
+      const dateA = new Date(a.modifiedTime || a.createdTime || 0).getTime();
+      const dateB = new Date(b.modifiedTime || b.createdTime || 0).getTime();
+
+      return dateB - dateA;
+    });
+  }
+
+  if (sortBy === "size") {
+    return copiedItems.sort((a, b) => Number(b.size || 0) - Number(a.size || 0));
+  }
+
+  return copiedItems;
+};
 
 export default function FilesPage() {
   const fileInputRef = useRef(null);
@@ -62,6 +91,8 @@ export default function FilesPage() {
   const [folderName, setFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState("grid");
+  const [sortBy, setSortBy] = useState("name");
   const [actionLoadingId, setActionLoadingId] = useState("");
   const [error, setError] = useState("");
 
@@ -103,8 +134,7 @@ export default function FilesPage() {
     } catch (error) {
       if (handleAuthError(error)) return;
 
-      const message =
-        error.response?.data?.message || "Failed to load files.";
+      const message = error.response?.data?.message || "Failed to load files.";
 
       setError(message);
       toast.error("Load failed", message);
@@ -536,12 +566,18 @@ export default function FilesPage() {
     }
   };
 
-  const filteredFolders = folders.filter((folder) =>
-    folder.name.toLowerCase().includes(search.toLowerCase())
+  const filteredFolders = sortItems(
+    folders.filter((folder) =>
+      folder.name.toLowerCase().includes(search.toLowerCase())
+    ),
+    sortBy
   );
 
-  const filteredFiles = files.filter((file) =>
-    file.name.toLowerCase().includes(search.toLowerCase())
+  const filteredFiles = sortItems(
+    files.filter((file) =>
+      file.name.toLowerCase().includes(search.toLowerCase())
+    ),
+    sortBy
   );
 
   return (
@@ -814,8 +850,10 @@ export default function FilesPage() {
         </section>
       )}
 
-      <section className="grid lg:grid-cols-[1fr_320px] gap-5">
-        <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
+      {/* <section className="grid lg:grid-cols-[1fr_320px] gap-5"> */}
+      <section className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_320px] gap-5">
+        {/* <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5"> */}
+        <div className="min-w-0 rounded-3xl border border-white/10 bg-white/[0.06] p-5">
           <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5 mb-6">
             <div className="flex flex-wrap items-center gap-2 text-sm text-white/55">
               {breadcrumb.map((crumb, index) => (
@@ -848,18 +886,14 @@ export default function FilesPage() {
               ))}
             </div>
 
-            <div className="relative">
-              <Search
-                size={18}
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35"
-              />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search files and folders..."
-                className="w-full xl:w-80 rounded-xl bg-black/25 border border-white/10 pl-11 pr-4 py-3 outline-none focus:border-blue-500"
-              />
-            </div>
+            <FileToolbar
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              sortBy={sortBy}
+              setSortBy={setSortBy}
+              search={search}
+              setSearch={setSearch}
+            />
           </div>
 
           {loading ? (
@@ -879,21 +913,42 @@ export default function FilesPage() {
                 <SectionHeader title="Folders" count={filteredFolders.length} />
 
                 {filteredFolders.length > 0 ? (
-                  <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {filteredFolders.map((folder) => (
-                      <VaultCard
-                        key={folder.id}
-                        item={folder}
-                        type="folder"
-                        loading={actionLoadingId === folder.id}
-                        onOpen={() => openFolder(folder)}
-                        onRename={() => renameItem(folder, "folder")}
-                        onDelete={() => deleteItem(folder, "folder")}
-                        onDropFiles={(droppedFiles) =>
-                          handleSelectedFiles(droppedFiles, folder.id)
-                        }
-                      />
-                    ))}
+                  <div
+                    className={
+                      viewMode === "grid"
+                        ? "grid sm:grid-cols-2 xl:grid-cols-3 gap-4"
+                        : "space-y-3"
+                    }
+                  >
+                    {filteredFolders.map((folder) =>
+                      viewMode === "grid" ? (
+                        <VaultCard
+                          key={folder.id}
+                          item={folder}
+                          type="folder"
+                          loading={actionLoadingId === folder.id}
+                          onOpen={() => openFolder(folder)}
+                          onRename={() => renameItem(folder, "folder")}
+                          onDelete={() => deleteItem(folder, "folder")}
+                          onDropFiles={(droppedFiles) =>
+                            handleSelectedFiles(droppedFiles, folder.id)
+                          }
+                        />
+                      ) : (
+                        <VaultListRow
+                          key={folder.id}
+                          item={folder}
+                          type="folder"
+                          loading={actionLoadingId === folder.id}
+                          onOpen={() => openFolder(folder)}
+                          onRename={() => renameItem(folder, "folder")}
+                          onDelete={() => deleteItem(folder, "folder")}
+                          onDropFiles={(droppedFiles) =>
+                            handleSelectedFiles(droppedFiles, folder.id)
+                          }
+                        />
+                      )
+                    )}
                   </div>
                 ) : (
                   <EmptySection text="No folders in this location." />
@@ -904,18 +959,36 @@ export default function FilesPage() {
                 <SectionHeader title="Files" count={filteredFiles.length} />
 
                 {filteredFiles.length > 0 ? (
-                  <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {filteredFiles.map((file) => (
-                      <VaultCard
-                        key={file.id}
-                        item={file}
-                        type="file"
-                        loading={actionLoadingId === file.id}
-                        onDownload={() => downloadFile(file)}
-                        onRename={() => renameItem(file, "file")}
-                        onDelete={() => deleteItem(file, "file")}
-                      />
-                    ))}
+                  <div
+                    className={
+                      viewMode === "grid"
+                        ? "grid sm:grid-cols-2 xl:grid-cols-3 gap-4"
+                        : "space-y-3"
+                    }
+                  >
+                    {filteredFiles.map((file) =>
+                      viewMode === "grid" ? (
+                        <VaultCard
+                          key={file.id}
+                          item={file}
+                          type="file"
+                          loading={actionLoadingId === file.id}
+                          onDownload={() => downloadFile(file)}
+                          onRename={() => renameItem(file, "file")}
+                          onDelete={() => deleteItem(file, "file")}
+                        />
+                      ) : (
+                        <VaultListRow
+                          key={file.id}
+                          item={file}
+                          type="file"
+                          loading={actionLoadingId === file.id}
+                          onDownload={() => downloadFile(file)}
+                          onRename={() => renameItem(file, "file")}
+                          onDelete={() => deleteItem(file, "file")}
+                        />
+                      )
+                    )}
                   </div>
                 ) : (
                   <EmptySection text="No files in this location." />
@@ -968,6 +1041,88 @@ export default function FilesPage() {
   );
 }
 
+function FileToolbar({
+  viewMode,
+  setViewMode,
+  sortBy,
+  setSortBy,
+  search,
+  setSearch,
+}) {
+  return (
+    <div className="w-full min-w-0 flex flex-col xl:flex-row xl:items-center gap-3">
+      <div className="flex items-center rounded-2xl border border-white/10 bg-black/25 p-1.5 w-full sm:w-fit shrink-0">
+        <button
+          onClick={() => setViewMode("grid")}
+          className={`h-11 flex-1 sm:flex-none px-4 rounded-xl flex items-center justify-center gap-2 text-sm font-bold transition ${
+            viewMode === "grid"
+              ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
+              : "text-white/50 hover:text-white hover:bg-white/10"
+          }`}
+          title="Grid view"
+        >
+          <Grid2X2 size={18} />
+          Grid
+        </button>
+
+        <button
+          onClick={() => setViewMode("list")}
+          className={`h-11 flex-1 sm:flex-none px-4 rounded-xl flex items-center justify-center gap-2 text-sm font-bold transition ${
+            viewMode === "list"
+              ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
+              : "text-white/50 hover:text-white hover:bg-white/10"
+          }`}
+          title="List view"
+        >
+          <List size={19} />
+          List
+        </button>
+      </div>
+
+      <div className="relative w-full xl:w-48 shrink-0">
+        <SlidersHorizontal
+          size={18}
+          className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-300"
+        />
+
+        <select
+          value={sortBy}
+          onChange={(event) => setSortBy(event.target.value)}
+          className="h-12 w-full rounded-2xl bg-black/25 border border-white/10 pl-12 pr-10 outline-none focus:border-blue-500 text-white font-semibold appearance-none"
+        >
+          <option value="name" className="bg-[#111b2a]">
+            Sort by name
+          </option>
+          <option value="newest" className="bg-[#111b2a]">
+            Sort by newest
+          </option>
+          <option value="size" className="bg-[#111b2a]">
+            Sort by size
+          </option>
+        </select>
+
+        <ArrowUpDown
+          size={15}
+          className="absolute right-4 top-1/2 -translate-y-1/2 text-white/35 pointer-events-none"
+        />
+      </div>
+
+      <div className="relative w-full xl:w-72 2xl:w-96 min-w-0">
+        <Search
+          size={19}
+          className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-300"
+        />
+
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search files and folders..."
+          className="h-12 w-full rounded-2xl bg-black/25 border border-white/10 pl-12 pr-4 outline-none focus:border-blue-500 font-semibold placeholder:text-white/35"
+        />
+      </div>
+    </div>
+  );
+}
 function StatusBadge({ status }) {
   const className =
     status === "success"
@@ -1121,6 +1276,143 @@ function VaultCard({
         >
           <Trash2 size={16} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+function VaultListRow({
+  item,
+  type,
+  loading,
+  onOpen,
+  onDownload,
+  onRename,
+  onDelete,
+  onDropFiles,
+}) {
+  const isFolder = type === "folder";
+  const [dragOverFolder, setDragOverFolder] = useState(false);
+
+  const handleFolderDragOver = (event) => {
+    if (!isFolder) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverFolder(true);
+  };
+
+  const handleFolderDragLeave = (event) => {
+    if (!isFolder) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverFolder(false);
+  };
+
+  const handleFolderDrop = (event) => {
+    if (!isFolder) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverFolder(false);
+
+    const droppedFiles = event.dataTransfer.files;
+
+    if (droppedFiles?.length && onDropFiles) {
+      onDropFiles(droppedFiles);
+    }
+  };
+
+  return (
+    <div
+      onDragOver={handleFolderDragOver}
+      onDragLeave={handleFolderDragLeave}
+      onDrop={handleFolderDrop}
+      className={`rounded-2xl border p-4 transition ${
+        dragOverFolder
+          ? "bg-blue-500/15 border-blue-400"
+          : "bg-black/20 border-white/10 hover:bg-white/[0.08]"
+      }`}
+    >
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <button
+            onClick={isFolder ? onOpen : undefined}
+            className={`h-12 w-12 rounded-2xl flex items-center justify-center shrink-0 ${
+              isFolder
+                ? "bg-yellow-500/15 text-yellow-300"
+                : "bg-blue-500/15 text-blue-300"
+            }`}
+          >
+            {isFolder ? <Folder size={24} /> : <FileText size={24} />}
+          </button>
+
+          <div className="min-w-0">
+            <button
+              onClick={isFolder ? onOpen : undefined}
+              className={`text-left w-full ${
+                isFolder ? "hover:text-blue-300" : ""
+              }`}
+            >
+              <h3 className="font-bold truncate">{item.name}</h3>
+            </button>
+
+            <p className="text-white/40 text-sm mt-1 truncate">
+              {isFolder
+                ? "Folder"
+                : item.size
+                ? `${formatBytes(item.size)} • ${item.mimeType || "File"}`
+                : item.mimeType || "File"}
+            </p>
+
+            {isFolder && (
+              <p className="text-blue-300/70 text-xs mt-1">
+                Drop files here to upload into this folder
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 xl:w-56">
+          {!isFolder ? (
+            <button
+              onClick={onDownload}
+              className="h-10 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center"
+              title="Download"
+            >
+              <Download size={16} />
+            </button>
+          ) : (
+            <button
+              onClick={onOpen}
+              className="h-10 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center"
+              title="Open"
+            >
+              <ChevronRight size={16} />
+            </button>
+          )}
+
+          <button
+            onClick={onRename}
+            className="h-10 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center"
+            title="Rename"
+          >
+            <Pencil size={16} />
+          </button>
+
+          <button
+            onClick={onDelete}
+            className="h-10 rounded-xl bg-red-500/10 border border-red-400/20 hover:bg-red-500/20 text-red-200 flex items-center justify-center"
+            title="Delete"
+          >
+            {loading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Trash2 size={16} />
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );
