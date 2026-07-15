@@ -14,6 +14,7 @@ const {
 const {
   assertUserContentAccess,
   isProtectedVaultFolder,
+  getFileMetadata,
 } = require("../services/driveGuard.service");
 
 const router = express.Router();
@@ -26,6 +27,32 @@ const getUserAuthClient = (user) => {
   });
 
   return authClient;
+};
+
+const getFolderLocationInfo = async (authClient, user, parentFolderId) => {
+  try {
+    if (!parentFolderId || parentFolderId === user.driveFolders?.uploads) {
+      return {
+        parentFolderId: user.driveFolders?.uploads || null,
+        parentFolderName: "Vault Root",
+        locationType: "vault_root",
+      };
+    }
+
+    const parentMetadata = await getFileMetadata(authClient, parentFolderId);
+
+    return {
+      parentFolderId,
+      parentFolderName: parentMetadata.name || "Unknown Folder",
+      locationType: "folder",
+    };
+  } catch {
+    return {
+      parentFolderId: parentFolderId || null,
+      parentFolderName: "Unknown Folder",
+      locationType: "unknown",
+    };
+  }
 };
 
 router.post("/", authMiddleware, async (req, res) => {
@@ -58,6 +85,12 @@ router.post("/", authMiddleware, async (req, res) => {
       parentFolderId: finalParentFolderId,
     });
 
+    const locationInfo = await getFolderLocationInfo(
+      authClient,
+      req.user,
+      finalParentFolderId
+    );
+
     await writeDailyLog(authClient, req.user.driveFolders.logs, {
       action: "FOLDER_CREATE",
       status: "SUCCESS",
@@ -65,7 +98,9 @@ router.post("/", authMiddleware, async (req, res) => {
       email: req.user.email,
       folderId: folder.id,
       folderName: folder.name,
-      parentFolderId: finalParentFolderId,
+      parentFolderId: locationInfo.parentFolderId,
+      parentFolderName: locationInfo.parentFolderName,
+      locationType: locationInfo.locationType,
     });
 
     res.status(201).json({
@@ -143,6 +178,14 @@ router.patch("/:folderId", authMiddleware, async (req, res) => {
 
     await assertUserContentAccess(authClient, req.user, folderId);
 
+    const beforeRenameMetadata = await getFileMetadata(authClient, folderId);
+
+    const locationInfo = await getFolderLocationInfo(
+      authClient,
+      req.user,
+      beforeRenameMetadata.parents?.[0]
+    );
+
     const folder = await renameFolder(authClient, {
       folderId,
       name: name.trim(),
@@ -154,7 +197,11 @@ router.patch("/:folderId", authMiddleware, async (req, res) => {
       userId: String(req.user._id),
       email: req.user.email,
       folderId: folder.id,
+      oldFolderName: beforeRenameMetadata.name,
       folderName: folder.name,
+      parentFolderId: locationInfo.parentFolderId,
+      parentFolderName: locationInfo.parentFolderName,
+      locationType: locationInfo.locationType,
     });
 
     res.json({
@@ -189,6 +236,14 @@ router.delete("/:folderId", authMiddleware, async (req, res) => {
       allowTrashed: true,
     });
 
+    const beforeDeleteMetadata = await getFileMetadata(authClient, folderId);
+
+    const locationInfo = await getFolderLocationInfo(
+      authClient,
+      req.user,
+      beforeDeleteMetadata.parents?.[0]
+    );
+
     const folder = await deleteFolder(authClient, {
       folderId,
     });
@@ -200,7 +255,10 @@ router.delete("/:folderId", authMiddleware, async (req, res) => {
         userId: String(req.user._id),
         email: req.user.email,
         folderId,
-        folderName: folder.name,
+        folderName: folder.name || beforeDeleteMetadata.name,
+        parentFolderId: locationInfo.parentFolderId,
+        parentFolderName: locationInfo.parentFolderName,
+        locationType: locationInfo.locationType,
       });
     }
 

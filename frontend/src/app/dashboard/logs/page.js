@@ -426,9 +426,15 @@ function getLogIcon(action = "") {
 }
 
 function getLogTarget(log) {
+  if (log.action === "STORAGE_CHECK") return "Storage quota checked";
+  if (log.action === "STORAGE_ALERT_TRIGGERED") return "Storage alert triggered";
+
   if (log.fileName) return `File: ${log.fileName}`;
   if (log.folderName) return `Folder: ${log.folderName}`;
-  if (log.parentFolderName) return `Folder: ${log.parentFolderName}`;
+  if (log.parentFolderName && log.action?.startsWith("FOLDER_")) {
+    return `Folder: ${log.parentFolderName}`;
+  }
+
   if (log.email) return log.email;
 
   if (log.fileId) return "File activity";
@@ -438,8 +444,9 @@ function getLogTarget(log) {
 }
 
 function getLogDescription(log) {
+  const location = getLocationText(log);
+
   if (log.action === "FILE_UPLOAD") {
-    const location = getUploadLocation(log);
     const size = log.size ? `Size: ${formatBytes(log.size)}.` : "";
     const mimeType = log.mimeType ? `Type: ${log.mimeType}.` : "";
 
@@ -447,15 +454,21 @@ function getLogDescription(log) {
   }
 
   if (log.action === "FILE_DOWNLOAD") {
-    return "File was downloaded from the vault.";
+    return [location, "File was downloaded from the vault."]
+      .filter(Boolean)
+      .join(" ");
   }
 
   if (log.action === "FILE_RENAME") {
-    return "File name was updated.";
+    const oldName = log.oldFileName ? `Old name: ${log.oldFileName}.` : "";
+
+    return [location, oldName, "File name was updated."]
+      .filter(Boolean)
+      .join(" ");
   }
 
   if (log.action === "FILE_DELETE") {
-    return "File was moved to trash.";
+    return [location, "File was moved to trash."].filter(Boolean).join(" ");
   }
 
   if (log.action === "FOLDER_CREATE") {
@@ -486,12 +499,126 @@ function getLogDescription(log) {
     return "User logged out and session token was invalidated.";
   }
 
+  if (log.action === "STORAGE_CHECK") {
+    return getStorageCheckText(log);
+  }
+
   if (log.action === "STORAGE_ALERT_TRIGGERED") {
     return getStorageAlertText(log);
   }
 
   return "";
 }
+
+function getLocationText(log) {
+  if (log.locationType === "vault_root") {
+    return "Location: Vault Root.";
+  }
+
+  if (log.locationType === "folder" && log.parentFolderName) {
+    return `Location: Folder: ${log.parentFolderName}.`;
+  }
+
+  if (log.uploadLocationType === "uploads_root") {
+    return "Location: Vault Root.";
+  }
+
+  if (log.uploadLocationType === "folder" && log.parentFolderName) {
+    return `Location: Folder: ${log.parentFolderName}.`;
+  }
+
+  if (log.parentFolderName) {
+    return `Location: ${log.parentFolderName}.`;
+  }
+
+  return "";
+}
+
+function getStorageCheckText(log) {
+  const parts = [];
+
+  if (log.usedPercent !== undefined) {
+    parts.push(`Used: ${log.usedPercent}%.`);
+  }
+
+  if (log.usage !== undefined) {
+    parts.push(`Usage: ${formatBytes(log.usage)}.`);
+  }
+
+  if (log.limit !== undefined) {
+    parts.push(`Limit: ${formatBytes(log.limit)}.`);
+  }
+
+  if (log.usageInDriveTrash !== undefined) {
+    parts.push(`Trash: ${formatBytes(log.usageInDriveTrash)}.`);
+  }
+
+  return parts.length > 0
+    ? parts.join(" ")
+    : "Storage quota was checked.";
+}
+
+function getStorageAlertText(log) {
+  if (!log.alertsTriggered?.length) {
+    return "Storage alert was triggered.";
+  }
+
+  const thresholds = log.alertsTriggered
+    .map((item) => `${item.threshold}%`)
+    .join(", ");
+
+  return `Storage threshold crossed: ${thresholds}.`;
+}
+
+
+
+// function getLocationText(log) {
+//   if (log.locationType === "vault_root") {
+//     return "Location: Vault Root.";
+//   }
+
+//   if (log.locationType === "folder" && log.parentFolderName) {
+//     return `Location: Folder: ${log.parentFolderName}.`;
+//   }
+
+//   if (log.uploadLocationType === "uploads_root") {
+//     return "Location: Vault Root.";
+//   }
+
+//   if (log.uploadLocationType === "folder" && log.parentFolderName) {
+//     return `Location: Folder: ${log.parentFolderName}.`;
+//   }
+
+//   if (log.parentFolderName) {
+//     return `Location: ${log.parentFolderName}.`;
+//   }
+
+//   return "";
+// }
+
+// function getStorageCheckText(log) {
+//   const parts = [];
+
+//   if (log.usedPercent !== undefined) {
+//     parts.push(`Used: ${log.usedPercent}%.`);
+//   }
+
+//   if (log.usage !== undefined) {
+//     parts.push(`Usage: ${formatBytes(log.usage)}.`);
+//   }
+
+//   if (log.limit !== undefined) {
+//     parts.push(`Limit: ${formatBytes(log.limit)}.`);
+//   }
+
+//   if (log.usageInDriveTrash !== undefined) {
+//     parts.push(`Trash: ${formatBytes(log.usageInDriveTrash)}.`);
+//   }
+
+//   return parts.length > 0
+//     ? parts.join(" ")
+//     : "Storage quota was checked.";
+// }
 
 function getUploadLocation(log) {
   if (log.uploadLocationType === "uploads_root") {
@@ -509,17 +636,17 @@ function getUploadLocation(log) {
   return "";
 }
 
-function getStorageAlertText(log) {
-  if (!log.alertsTriggered?.length) {
-    return "Storage alert was triggered.";
-  }
+// function getStorageAlertText(log) {
+//   if (!log.alertsTriggered?.length) {
+//     return "Storage alert was triggered.";
+//   }
 
-  const thresholds = log.alertsTriggered
-    .map((item) => `${item.threshold}%`)
-    .join(", ");
+//   const thresholds = log.alertsTriggered
+//     .map((item) => `${item.threshold}%`)
+//     .join(", ");
 
-  return `Storage threshold crossed: ${thresholds}.`;
-}
+//   return `Storage threshold crossed: ${thresholds}.`;
+// }
 
 function formatLogTime(timestamp) {
   if (!timestamp) return "No timestamp";
