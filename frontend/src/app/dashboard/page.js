@@ -25,37 +25,83 @@ const actionColorMap = {
   PASSWORD_LOGIN_SUCCESS: "bg-green-500/15 text-green-300",
   PASSWORD_SET_OR_RESET: "bg-purple-500/15 text-purple-300",
   LOGOUT: "bg-red-500/15 text-red-300",
+
   FILE_UPLOAD: "bg-blue-500/15 text-blue-300",
   FILE_DOWNLOAD: "bg-cyan-500/15 text-cyan-300",
   FILE_RENAME: "bg-yellow-500/15 text-yellow-300",
   FILE_DELETE: "bg-red-500/15 text-red-300",
+
   FOLDER_CREATE: "bg-green-500/15 text-green-300",
   FOLDER_RENAME: "bg-yellow-500/15 text-yellow-300",
   FOLDER_DELETE: "bg-red-500/15 text-red-300",
+
   STORAGE_CHECK: "bg-indigo-500/15 text-indigo-300",
+  STORAGE_ALERT_TRIGGERED: "bg-orange-500/15 text-orange-300",
 };
 
 const getLogTarget = (log) => {
+  if (log.action === "STORAGE_CHECK") return "Storage quota checked";
+  if (log.action === "STORAGE_ALERT_TRIGGERED") return "Storage alert triggered";
+
   if (log.fileName) return `File: ${log.fileName}`;
   if (log.folderName) return `Folder: ${log.folderName}`;
-  if (log.parentFolderName) return `Folder: ${log.parentFolderName}`;
   if (log.email) return log.email;
+
+  if (log.fileId) return "File activity";
+  if (log.folderId) return "Folder activity";
+
   return "Vault activity";
 };
 
 const getLogLocation = (log) => {
-  if (log.action !== "FILE_UPLOAD") return null;
+  if (log.locationType === "vault_root") {
+    return "Location: Vault Root";
+  }
+
+  if (log.locationType === "folder" && log.parentFolderName) {
+    return `Location: Folder: ${log.parentFolderName}`;
+  }
 
   if (log.uploadLocationType === "uploads_root") {
-    return "Uploaded directly in Uploads";
+    return "Location: Vault Root";
   }
 
   if (log.uploadLocationType === "folder" && log.parentFolderName) {
-    return `Uploaded inside folder: ${log.parentFolderName}`;
+    return `Location: Folder: ${log.parentFolderName}`;
   }
 
-  if (log.parentFolderId) {
-    return "Uploaded inside folder";
+  if (log.parentFolderName) {
+    return `Location: ${log.parentFolderName}`;
+  }
+
+  return null;
+};
+
+const getLogExtraText = (log) => {
+  if (log.action === "FILE_RENAME" && log.oldFileName) {
+    return `Old name: ${log.oldFileName}`;
+  }
+
+  if (log.action === "FOLDER_RENAME" && log.oldFolderName) {
+    return `Old name: ${log.oldFolderName}`;
+  }
+
+  if (log.action === "STORAGE_CHECK") {
+    const parts = [];
+
+    if (log.usedPercent !== undefined) {
+      parts.push(`Used: ${log.usedPercent}%`);
+    }
+
+    if (log.usage !== undefined) {
+      parts.push(`Usage: ${formatBytes(log.usage)}`);
+    }
+
+    if (log.limit !== undefined) {
+      parts.push(`Limit: ${formatBytes(log.limit)}`);
+    }
+
+    return parts.join(" • ");
   }
 
   return null;
@@ -203,10 +249,12 @@ export default function DashboardPage() {
               label="Used"
               value={storage ? formatBytes(storage.usage) : "..."}
             />
+
             <MiniStat
               label="Limit"
               value={storage ? formatBytes(storage.limit) : "..."}
             />
+
             <MiniStat
               label="Trash"
               value={storage ? formatBytes(storage.usageInDriveTrash) : "..."}
@@ -265,6 +313,7 @@ export default function DashboardPage() {
               logs.map((log, index) => {
                 const target = getLogTarget(log);
                 const location = getLogLocation(log);
+                const extraText = getLogExtraText(log);
 
                 return (
                   <div
@@ -289,6 +338,12 @@ export default function DashboardPage() {
                         {location && (
                           <p className="text-blue-300/80 text-sm mt-1 truncate">
                             {location}
+                          </p>
+                        )}
+
+                        {extraText && (
+                          <p className="text-white/45 text-sm mt-1 truncate">
+                            {extraText}
                           </p>
                         )}
 
