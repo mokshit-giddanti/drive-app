@@ -1,5 +1,7 @@
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 require("dotenv").config();
@@ -19,20 +21,79 @@ const { writeDailyLog } = require("./services/log.service");
 const folderRoutes = require("./routes/folder.routes");
 const fileRoutes = require("./routes/file.routes");
 const storageRoutes = require("./routes/storage.routes");
-const { startSelfPing } = require("./services/selfPing.service");
 const logRoutes = require("./routes/log.routes");
+
+const { startSelfPing } = require("./services/selfPing.service");
 
 const app = express();
 
 app.set("trust proxy", 1);
 
-// app.use(cors());
-app.use(express.json());
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+].filter(Boolean);
 
-app.use("/api/folders", folderRoutes);
-app.use("/api/files", fileRoutes);
-app.use("/api/storage", storageRoutes);
-app.use("/api/logs", logRoutes);
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+  })
+);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+  })
+);
+
+app.use(
+  express.json({
+    limit: "1mb",
+  })
+);
+
+app.use(
+  express.urlencoded({
+    extended: false,
+    limit: "1mb",
+  })
+);
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 500,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests. Please try again later.",
+  },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 40,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many authentication attempts. Please try again later.",
+  },
+});
 
 const googleScopes = [
   "openid",
@@ -46,18 +107,6 @@ const getBackendUrl = (req) => {
   return process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
 };
 
-// const createAppToken = (user, authProvider) => {
-//   return jwt.sign(
-//     {
-//       userId: user._id,
-//       googleId: user.googleId,
-//       email: user.email,
-//       authProvider,
-//     },
-//     process.env.JWT_SECRET,
-//     { expiresIn: "7d" }
-//   );
-// };
 const createAppToken = (user, authProvider) => {
   return jwt.sign(
     {
@@ -68,9 +117,12 @@ const createAppToken = (user, authProvider) => {
       tokenVersion: user.tokenVersion || 0,
     },
     process.env.JWT_SECRET,
-    { expiresIn: "7d" }
+    {
+      expiresIn: "7d",
+    }
   );
 };
+
 const getUserAuthClient = (user) => {
   const authClient = createOAuth2Client();
 
@@ -88,16 +140,14 @@ app.get("/", (req, res) => {
   });
 });
 
-// app.get("/api/auth/google", (req, res) => {
-//   const authUrl = oauth2Client.generateAuthUrl({
-//     access_type: "offline",
-//     prompt: "consent",
-//     scope: googleScopes,
-//   });
+app.use("/api", apiLimiter);
 
-//   res.redirect(authUrl);
-// });
-app.get("/api/auth/google", (req, res) => {
+app.use("/api/folders", folderRoutes);
+app.use("/api/files", fileRoutes);
+app.use("/api/storage", storageRoutes);
+app.use("/api/logs", logRoutes);
+
+app.get("/api/auth/google", authLimiter, (req, res) => {
   const mode = req.query.mode || "login";
 
   const state = Buffer.from(
@@ -116,7 +166,7 @@ app.get("/api/auth/google", (req, res) => {
   res.redirect(authUrl);
 });
 
-app.get("/api/auth/google/callback", async (req, res) => {
+app.get("/api/auth/google/callback", authLimiter, async (req, res) => {
   try {
     const { code } = req.query;
 
@@ -151,8 +201,12 @@ app.get("/api/auth/google/callback", async (req, res) => {
     }
 
     let dbUser = await User.findOneAndUpdate(
-      { googleId: googleUser.id },
-      { $set: updateData },
+      {
+        googleId: googleUser.id,
+      },
+      {
+        $set: updateData,
+      },
       {
         new: true,
         upsert: true,
@@ -191,51 +245,32 @@ app.get("/api/auth/google/callback", async (req, res) => {
     }
 
     const appToken = createAppToken(dbUser, "google");
-
     const hasPassword = Boolean(dbUser.passwordHash);
 
-    // res.json({
-    //   success: true,
-    //   message: "Google login successful",
-    //   user: {
-    //     id: dbUser._id,
-    //     googleId: dbUser.googleId,
-    //     email: dbUser.email,
-    //     name: dbUser.name,
-    //     picture: dbUser.picture,
-    //   },
-    //   driveFolders: dbUser.driveFolders,
-    //   token: appToken,
-    //   hasGoogleRefreshToken: Boolean(dbUser.googleRefreshToken),
-    //   receivedNewRefreshToken: Boolean(tokens.refresh_token),
-    //   hasPassword,
-    //   requiresPasswordSetup: !hasPassword,
-    //   nextAction: hasPassword ? "GO_TO_DASHBOARD" : "SET_PASSWORD",
-    // });
-  let mode = "login";
+    let mode = "login";
 
-try {
-  if (req.query.state) {
-    const parsedState = JSON.parse(
-      Buffer.from(req.query.state, "base64url").toString("utf8")
-    );
+    try {
+      if (req.query.state) {
+        const parsedState = JSON.parse(
+          Buffer.from(req.query.state, "base64url").toString("utf8")
+        );
 
-    mode = parsedState.mode || "login";
-  }
-} catch {
-  mode = "login";
-}
+        mode = parsedState.mode || "login";
+      }
+    } catch {
+      mode = "login";
+    }
 
-const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
 
-const nextPath =
-  mode === "reset" || !hasPassword ? "/set-password" : "/dashboard";
+    const nextPath =
+      mode === "reset" || !hasPassword ? "/set-password" : "/dashboard";
 
-const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(
-  appToken
-)}&next=${encodeURIComponent(nextPath)}`;
+    const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(
+      appToken
+    )}&next=${encodeURIComponent(nextPath)}`;
 
-return res.redirect(redirectUrl);
+    return res.redirect(redirectUrl);
   } catch (error) {
     console.error("Google OAuth Error:", error);
 
@@ -247,73 +282,78 @@ return res.redirect(redirectUrl);
   }
 });
 
-app.post("/api/auth/set-password", authMiddleware, async (req, res) => {
-  try {
-    const { password } = req.body;
-
-    if (req.auth.authProvider !== "google") {
-      return res.status(403).json({
-        success: false,
-        code: "GOOGLE_LOGIN_REQUIRED",
-        message:
-          "Password setup/reset requires Google login. Please login with Google again.",
-        googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
-      });
-    }
-
-    if (!password || password.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 8 characters long",
-      });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-
-    const dbUser = await User.findByIdAndUpdate(
-      req.user._id,
-      {
-        $set: {
-          passwordHash,
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
-
-    const authClient = getUserAuthClient(dbUser);
-
+app.post(
+  "/api/auth/set-password",
+  authLimiter,
+  authMiddleware,
+  async (req, res) => {
     try {
-      await writeDailyLog(authClient, dbUser.driveFolders.logs, {
-        action: "PASSWORD_SET_OR_RESET",
-        status: "SUCCESS",
-        userId: String(dbUser._id),
-        email: dbUser.email,
+      const { password } = req.body;
+
+      if (req.auth.authProvider !== "google") {
+        return res.status(403).json({
+          success: false,
+          code: "GOOGLE_LOGIN_REQUIRED",
+          message:
+            "Password setup/reset requires Google login. Please login with Google again.",
+          googleLoginUrl: `${getBackendUrl(req)}/api/auth/google`,
+        });
+      }
+
+      if (!password || password.length < 8) {
+        return res.status(400).json({
+          success: false,
+          message: "Password must be at least 8 characters long",
+        });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      const dbUser = await User.findByIdAndUpdate(
+        req.user._id,
+        {
+          $set: {
+            passwordHash,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
+
+      const authClient = getUserAuthClient(dbUser);
+
+      try {
+        await writeDailyLog(authClient, dbUser.driveFolders.logs, {
+          action: "PASSWORD_SET_OR_RESET",
+          status: "SUCCESS",
+          userId: String(dbUser._id),
+          email: dbUser.email,
+        });
+      } catch (logError) {
+        console.error("Password set/reset log failed:", logError.message);
+      }
+
+      res.json({
+        success: true,
+        message: "Password set/reset successfully",
+        hasPassword: true,
+        nextAction: "LOGIN_WITH_EMAIL_PASSWORD",
       });
-    } catch (logError) {
-      console.error("Password set/reset log failed:", logError.message);
+    } catch (error) {
+      console.error("Set/reset password error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to set/reset password",
+        error: error.message,
+      });
     }
-
-    res.json({
-      success: true,
-      message: "Password set/reset successfully",
-      hasPassword: true,
-      nextAction: "LOGIN_WITH_EMAIL_PASSWORD",
-    });
-  } catch (error) {
-    console.error("Set/reset password error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to set/reset password",
-      error: error.message,
-    });
   }
-});
+);
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -410,6 +450,7 @@ app.post("/api/auth/login", async (req, res) => {
     });
   }
 });
+
 app.post("/api/auth/logout", authMiddleware, async (req, res) => {
   try {
     const dbUser = await User.findByIdAndUpdate(
@@ -471,6 +512,23 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
     hasPassword: Boolean(req.user.passwordHash),
   });
 });
+
+app.use((error, req, res, next) => {
+  if (error.message?.startsWith("CORS blocked")) {
+    return res.status(403).json({
+      success: false,
+      message: error.message,
+    });
+  }
+
+  console.error("Unhandled server error:", error);
+
+  res.status(500).json({
+    success: false,
+    message: "Internal server error",
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
