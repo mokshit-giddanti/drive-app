@@ -23,6 +23,9 @@ const {
 
 const router = express.Router();
 
+const FILE_LIST_CACHE_TTL_MS = 10 * 1000;
+const fileListCache = new Map();
+
 const getUserAuthClient = (user) => {
   const authClient = createOAuth2Client();
 
@@ -31,6 +34,47 @@ const getUserAuthClient = (user) => {
   });
 
   return authClient;
+};
+
+const getFileListCacheKey = (user, parentFolderId) => {
+  return `${user._id}:files:${parentFolderId || "root"}`;
+};
+
+const getCachedFileList = (user, parentFolderId) => {
+  const cacheKey = getFileListCacheKey(user, parentFolderId);
+  const cached = fileListCache.get(cacheKey);
+
+  if (!cached) return null;
+
+  if (Date.now() > cached.expiresAt) {
+    fileListCache.delete(cacheKey);
+    return null;
+  }
+
+  return cached.payload;
+};
+
+const setCachedFileList = (user, parentFolderId, payload) => {
+  const cacheKey = getFileListCacheKey(user, parentFolderId);
+
+  fileListCache.set(cacheKey, {
+    payload,
+    expiresAt: Date.now() + FILE_LIST_CACHE_TTL_MS,
+  });
+};
+
+const clearUserFileListCache = (user) => {
+  const userPrefix = `${user._id}:files:`;
+
+  for (const key of fileListCache.keys()) {
+    if (key.startsWith(userPrefix)) {
+      fileListCache.delete(key);
+    }
+  }
+};
+
+const shouldForceRefresh = (req) => {
+  return String(req.query.refresh || "").toLowerCase() === "true";
 };
 
 const getFolderLocationInfo = async (authClient, user, parentFolderId) => {
@@ -157,6 +201,8 @@ router.post(
         parentFolderId: finalParentFolderId,
       });
 
+      clearUserFileListCache(req.user);
+
       const locationInfo = await getFolderLocationInfo(
         authClient,
         req.user,
@@ -217,16 +263,34 @@ router.get("/", authMiddleware, async (req, res) => {
       });
     }
 
+    if (!shouldForceRefresh(req)) {
+      const cachedPayload = getCachedFileList(req.user, finalParentFolderId);
+
+      if (cachedPayload) {
+        return res.json({
+          ...cachedPayload,
+          cached: true,
+        });
+      }
+    }
+
     await assertUserContentAccess(authClient, req.user, finalParentFolderId);
 
     const files = await listFiles(authClient, {
       parentFolderId: finalParentFolderId,
     });
 
-    res.json({
+    const payload = {
       success: true,
       count: files.length,
       files,
+    };
+
+    setCachedFileList(req.user, finalParentFolderId, payload);
+
+    res.json({
+      ...payload,
+      cached: false,
     });
   } catch (error) {
     console.error("List files error:", error);
@@ -345,6 +409,8 @@ router.patch("/:fileId", authMiddleware, async (req, res) => {
       name: name.trim(),
     });
 
+    clearUserFileListCache(req.user);
+
     await writeDailyLog(authClient, req.user.driveFolders.logs, {
       action: "FILE_RENAME",
       status: "SUCCESS",
@@ -395,6 +461,8 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
     const file = await deleteFile(authClient, {
       fileId,
     });
+
+    clearUserFileListCache(req.user);
 
     if (!file.alreadyTrashed) {
       await writeDailyLog(authClient, req.user.driveFolders.logs, {
