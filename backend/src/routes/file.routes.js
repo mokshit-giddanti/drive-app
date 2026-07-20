@@ -5,7 +5,11 @@ const upload = require("../middleware/upload.middleware");
 
 const { createOAuth2Client } = require("../config/google");
 const { writeDailyLog } = require("../services/log.service");
-const { checkStorageAlerts } = require("../services/storage.service");
+
+const {
+  getStorageStatus,
+  checkStorageAlerts,
+} = require("../services/storage.service");
 
 const {
   assertUserContentAccess,
@@ -19,6 +23,7 @@ const {
   downloadFile,
   renameFile,
   deleteFile,
+  deleteTempFile,
 } = require("../services/file.service");
 
 const router = express.Router();
@@ -75,6 +80,92 @@ const clearUserFileListCache = (user) => {
 
 const shouldForceRefresh = (req) => {
   return String(req.query.refresh || "").toLowerCase() === "true";
+};
+
+const formatBytesForMessage = (bytes) => {
+  const value = Number(bytes || 0);
+
+  if (value < 1024) return `${value} B`;
+
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(2)} KB`;
+  }
+
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+};
+
+const getAvailableDriveBytes = (status) => {
+  const limit = Number(status?.limit || 0);
+  const usage = Number(status?.usage || 0);
+
+  if (!limit || limit <= 0) {
+    return null;
+  }
+
+  return Math.max(limit - usage, 0);
+};
+
+const hasEnoughDriveStorage = (status, fileSize) => {
+  const availableBytes = getAvailableDriveBytes(status);
+
+  if (availableBytes === null) {
+    return true;
+  }
+
+  return Number(fileSize || 0) <= availableBytes;
+};
+
+const buildTooLargeResponse = (status, fileSize) => {
+  const availableBytes = getAvailableDriveBytes(status);
+
+  return {
+    success: false,
+    code: "INSUFFICIENT_DRIVE_STORAGE",
+    message: `File is too large for available Google Drive storage. Available: ${formatBytesForMessage(
+      availableBytes
+    )}, file size: ${formatBytesForMessage(fileSize)}.`,
+    fileSize,
+    availableBytes,
+    storageStatus: status,
+  };
+};
+
+const checkDriveStorageBeforeUpload = async (req, res, next) => {
+  try {
+    const authClient = getUserAuthClient(req.user);
+
+    const declaredFileSize = Number(
+      req.headers["x-file-size"] || req.headers["content-length"] || 0
+    );
+
+    if (!declaredFileSize || declaredFileSize <= 0) {
+      return next();
+    }
+
+    const status = await getStorageStatus(authClient);
+
+    req.storageStatusBeforeUpload = status;
+
+    if (!hasEnoughDriveStorage(status, declaredFileSize)) {
+      return res
+        .status(413)
+        .json(buildTooLargeResponse(status, declaredFileSize));
+    }
+
+    return next();
+  } catch (error) {
+    console.error("Pre-upload storage check failed:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check available Google Drive storage before upload.",
+      error: error.message,
+    });
+  }
 };
 
 const getFolderLocationInfo = async (authClient, user, parentFolderId) => {
@@ -168,6 +259,7 @@ const runStorageAlertCheck = async (authClient, user) => {
 router.post(
   "/upload",
   authMiddleware,
+  checkDriveStorageBeforeUpload,
   upload.single("file"),
   async (req, res) => {
     try {
@@ -194,8 +286,31 @@ router.post(
 
       await assertUserContentAccess(authClient, req.user, finalParentFolderId);
 
+      const exactFileSize = Number(req.file.size || 0);
+
+      const storageStatus =
+        req.storageStatusBeforeUpload || (await getStorageStatus(authClient));
+
+      if (!hasEnoughDriveStorage(storageStatus, exactFileSize)) {
+        await writeDailyLog(authClient, req.user.driveFolders.logs, {
+          action: "FILE_UPLOAD_REJECTED",
+          status: "FAILED",
+          userId: String(req.user._id),
+          email: req.user.email,
+          fileName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          size: exactFileSize,
+          reason: "INSUFFICIENT_DRIVE_STORAGE",
+          availableBytes: getAvailableDriveBytes(storageStatus),
+        });
+
+        return res
+          .status(413)
+          .json(buildTooLargeResponse(storageStatus, exactFileSize));
+      }
+
       const uploadedFile = await uploadFile(authClient, {
-        fileBuffer: req.file.buffer,
+        filePath: req.file.path,
         originalName: req.file.originalname,
         mimeType: req.file.mimetype,
         parentFolderId: finalParentFolderId,
@@ -243,6 +358,8 @@ router.post(
         success: false,
         message: error.message || "Failed to upload file",
       });
+    } finally {
+      await deleteTempFile(req.file?.path);
     }
   }
 );
@@ -398,6 +515,7 @@ router.patch("/:fileId", authMiddleware, async (req, res) => {
     await assertUserContentAccess(authClient, req.user, fileId);
 
     const beforeRenameMetadata = await getFileMetadata(authClient, fileId);
+
     const locationInfo = await getFolderLocationInfo(
       authClient,
       req.user,
@@ -452,6 +570,7 @@ router.delete("/:fileId", authMiddleware, async (req, res) => {
     });
 
     const beforeDeleteMetadata = await getFileMetadata(authClient, fileId);
+
     const locationInfo = await getFolderLocationInfo(
       authClient,
       req.user,

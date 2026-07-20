@@ -1,5 +1,5 @@
+const fs = require("fs");
 const { google } = require("googleapis");
-const { Readable } = require("stream");
 
 const FOLDER_MIME_TYPE = "application/vnd.google-apps.folder";
 
@@ -14,13 +14,9 @@ const escapeDriveQueryValue = (value) => {
   return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 };
 
-const bufferToStream = (buffer) => {
-  return Readable.from(buffer);
-};
-
 const uploadFile = async (
   authClient,
-  { fileBuffer, originalName, mimeType, parentFolderId }
+  { filePath, originalName, mimeType, parentFolderId }
 ) => {
   const drive = getDriveClient(authClient);
 
@@ -31,7 +27,7 @@ const uploadFile = async (
     },
     media: {
       mimeType,
-      body: bufferToStream(fileBuffer),
+      body: fs.createReadStream(filePath),
     },
     fields:
       "id, name, mimeType, size, parents, webViewLink, webContentLink, createdTime, modifiedTime",
@@ -138,6 +134,16 @@ const deleteFile = async (authClient, { fileId }) => {
   };
 };
 
+const deleteTempFile = async (filePath) => {
+  if (!filePath) return;
+
+  try {
+    await fs.promises.unlink(filePath);
+  } catch {
+    // temp cleanup failure should not break API
+  }
+};
+
 module.exports = {
   uploadFile,
   listFiles,
@@ -145,4 +151,5 @@ module.exports = {
   downloadFile,
   renameFile,
   deleteFile,
+  deleteTempFile,
 };
