@@ -19,6 +19,9 @@ const {
 
 const router = express.Router();
 
+const FOLDER_LIST_CACHE_TTL_MS = 10 * 1000;
+const folderListCache = new Map();
+
 const getUserAuthClient = (user) => {
   const authClient = createOAuth2Client();
 
@@ -27,6 +30,47 @@ const getUserAuthClient = (user) => {
   });
 
   return authClient;
+};
+
+const getFolderListCacheKey = (user, parentFolderId) => {
+  return `${user._id}:folders:${parentFolderId || "root"}`;
+};
+
+const getCachedFolderList = (user, parentFolderId) => {
+  const cacheKey = getFolderListCacheKey(user, parentFolderId);
+  const cached = folderListCache.get(cacheKey);
+
+  if (!cached) return null;
+
+  if (Date.now() > cached.expiresAt) {
+    folderListCache.delete(cacheKey);
+    return null;
+  }
+
+  return cached.payload;
+};
+
+const setCachedFolderList = (user, parentFolderId, payload) => {
+  const cacheKey = getFolderListCacheKey(user, parentFolderId);
+
+  folderListCache.set(cacheKey, {
+    payload,
+    expiresAt: Date.now() + FOLDER_LIST_CACHE_TTL_MS,
+  });
+};
+
+const clearUserFolderListCache = (user) => {
+  const userPrefix = `${user._id}:folders:`;
+
+  for (const key of folderListCache.keys()) {
+    if (key.startsWith(userPrefix)) {
+      folderListCache.delete(key);
+    }
+  }
+};
+
+const shouldForceRefresh = (req) => {
+  return String(req.query.refresh || "").toLowerCase() === "true";
 };
 
 const getFolderLocationInfo = async (authClient, user, parentFolderId) => {
@@ -85,6 +129,8 @@ router.post("/", authMiddleware, async (req, res) => {
       parentFolderId: finalParentFolderId,
     });
 
+    clearUserFolderListCache(req.user);
+
     const locationInfo = await getFolderLocationInfo(
       authClient,
       req.user,
@@ -134,16 +180,34 @@ router.get("/", authMiddleware, async (req, res) => {
       });
     }
 
+    if (!shouldForceRefresh(req)) {
+      const cachedPayload = getCachedFolderList(req.user, finalParentFolderId);
+
+      if (cachedPayload) {
+        return res.json({
+          ...cachedPayload,
+          cached: true,
+        });
+      }
+    }
+
     await assertUserContentAccess(authClient, req.user, finalParentFolderId);
 
     const folders = await listFolders(authClient, {
       parentFolderId: finalParentFolderId,
     });
 
-    res.json({
+    const payload = {
       success: true,
       count: folders.length,
       folders,
+    };
+
+    setCachedFolderList(req.user, finalParentFolderId, payload);
+
+    res.json({
+      ...payload,
+      cached: false,
     });
   } catch (error) {
     console.error("List folders error:", error);
@@ -190,6 +254,8 @@ router.patch("/:folderId", authMiddleware, async (req, res) => {
       folderId,
       name: name.trim(),
     });
+
+    clearUserFolderListCache(req.user);
 
     await writeDailyLog(authClient, req.user.driveFolders.logs, {
       action: "FOLDER_RENAME",
@@ -247,6 +313,8 @@ router.delete("/:folderId", authMiddleware, async (req, res) => {
     const folder = await deleteFolder(authClient, {
       folderId,
     });
+
+    clearUserFolderListCache(req.user);
 
     if (!folder.alreadyTrashed) {
       await writeDailyLog(authClient, req.user.driveFolders.logs, {
